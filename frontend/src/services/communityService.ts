@@ -1,0 +1,31 @@
+import {
+  createCommunityComment,
+  createCommunityPost,
+  createCommunityReport,
+  deleteCommunityComment,
+  deleteCommunityPost,
+  getCommunityPostById,
+  listCommunityCommentCounts,
+  listCommunityComments,
+  listCommunityPosts,
+  listTrendingTopics,
+  toggleCommunityPostLike,
+  toggleCommunityPostSave,
+  updateCommunityPost,
+} from '../repositories/communityRepository';
+
+export const communityService = {
+  listCommunityPosts,
+  getCommunityPostById,
+  createCommunityPost,
+  updateCommunityPost,
+  toggleCommunityPostLike,
+  toggleCommunityPostSave,
+  listCommunityComments,
+  listCommunityCommentCounts,
+  createCommunityComment,
+  deleteCommunityComment,
+  listTrendingTopics,
+  createCommunityReport,
+  deleteCommunityPost,
+};

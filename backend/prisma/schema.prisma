@@ -1,0 +1,493 @@
+datasource db {
+  provider = "mysql"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum UserRole {
+  TEACHER
+  STUDENT
+  ADMIN
+
+  @@map("role")
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+  PENDING
+
+  @@map("user_status")
+}
+
+enum LessonLifecycleStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+
+  @@map("lesson_lifecycle_status")
+}
+
+enum ModerationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+
+  @@map("moderation_status")
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  FAILED
+  CANCELLED
+
+  @@map("order_status")
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  CANCELLED
+
+  @@map("payment_status")
+}
+
+enum NotificationType {
+  SYSTEM
+  ORDER
+  PAYMENT
+  LESSON
+  REVIEW
+  FOLLOW
+  COMMENT
+  REPORT
+
+  @@map("notification_type")
+}
+
+enum ReportStatus {
+  OPEN
+  IN_REVIEW
+  RESOLVED
+  REJECTED
+
+  @@map("report_status")
+}
+
+enum PostReactionType {
+  LIKE
+  SAVE
+
+  @@map("post_reaction_type")
+}
+
+enum WalletTransactionStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  CANCELLED
+
+  @@map("wallet_transaction_status")
+}
+
+enum PayoutTargetType {
+  BANK
+  MOMO
+  PAYPAL
+
+  @@map("payout_target_type")
+}
+
+enum PayoutVerificationStatus {
+  PENDING
+  SUCCESS
+  ERROR
+
+  @@map("payout_verification_status")
+}
+
+model User {
+  id                 Int                  @id @default(autoincrement())
+  fullName           String
+  email              String               @unique
+  password           String
+  role               UserRole             @default(TEACHER)
+  status             UserStatus           @default(ACTIVE)
+  avatarUrl          String?
+  bio                String?              @db.Text
+  lessons            Lesson[]             @relation("LessonAuthor")
+  refreshTokens      RefreshToken[]
+  teacherProfile     TeacherProfile?
+  orders             Order[]              @relation("OrderBuyer")
+  payments           Payment[]
+  reviewsWritten     Review[]             @relation("ReviewAuthor")
+  reviewsReceived    Review[]             @relation("ReviewTargetTeacher")
+  followers          Follow[]             @relation("FollowTarget")
+  following          Follow[]             @relation("FollowSource")
+  notifications      Notification[]       @relation("NotificationRecipient")
+  notificationsSent  Notification[]       @relation("NotificationActor")
+  posts              Post[]
+  comments           Comment[]
+  postReactions      PostReaction[]
+  wallet             Wallet?
+  walletTransactions WalletTransaction[]  @relation("WalletTransactionActor")
+  payoutAccounts     PayoutAccount[]
+  lessonFavorites    LessonFavorite[]
+  reportsSubmitted   Report[]             @relation("ReportReporter")
+  reportsReviewed    Report[]             @relation("ReportModerator")
+  reportsTargeted    Report[]             @relation("ReportTargetUser")
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+
+  @@index([role])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model RefreshToken {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  token     String   @unique @db.VarChar(512)
+  expiresAt DateTime
+  revokedAt DateTime?
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model TeacherProfile {
+  id               Int              @id @default(autoincrement())
+  userId           Int              @unique
+  headline         String?
+  about            String?          @db.Text
+  specialties      String?          @db.Text
+  hourlyRate       Decimal?         @db.Decimal(10, 2)
+  expertise        String?          @db.Text
+  yearsExperience  Int?
+  location         String?
+  socialLinks      String?          @db.Text
+  avatarUrl        String?
+  moderationStatus ModerationStatus @default(PENDING)
+  user             User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  @@index([yearsExperience])
+}
+
+model Lesson {
+  id                 Int                   @id @default(autoincrement())
+  title              String
+  description        String?               @db.Text
+  price              Decimal               @db.Decimal(10, 2)
+  fileUrl            String
+  subject            String?
+  gradeLevel         String?
+  isPublished        Boolean               @default(false)
+  status             LessonLifecycleStatus @default(DRAFT)
+  moderationStatus   ModerationStatus      @default(PENDING)
+  moderationNote     String?               @db.Text
+  moderationUpdatedAt DateTime?
+  moderationUpdatedBy String?              @db.VarChar(64)
+  thumbnailUrl       String?
+  authorId           Int
+  author             User                  @relation("LessonAuthor", fields: [authorId], references: [id], onDelete: Cascade)
+  attachments        LessonAttachment[]
+  orders             Order[]
+  reviews            Review[]
+  favorites          LessonFavorite[]
+  reports            Report[]              @relation("ReportTargetLesson")
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
+
+  @@index([authorId])
+  @@index([subject])
+  @@index([gradeLevel])
+  @@index([isPublished])
+  @@index([status])
+  @@index([moderationStatus])
+}
+
+model LessonAttachment {
+  id        Int      @id @default(autoincrement())
+  lessonId  Int
+  fileUrl   String
+  fileName  String
+  mimeType  String?
+  fileSize  Int?
+  position  Int      @default(0)
+  lesson    Lesson   @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([lessonId])
+  @@index([lessonId, position])
+}
+
+model Order {
+  id                   Int         @id @default(autoincrement())
+  buyerId              Int
+  lessonId             Int
+  status               OrderStatus @default(PENDING)
+  amount               Decimal     @db.Decimal(10, 2)
+  currency             String      @default("VND") @db.VarChar(8)
+  referenceCode        String?     @unique
+  paidAt               DateTime?
+  failedAt             DateTime?
+  cancelledAt          DateTime?
+  entitlementGrantedAt DateTime?
+  entitlementSource    String?     @db.VarChar(64)
+  buyer                User        @relation("OrderBuyer", fields: [buyerId], references: [id], onDelete: Cascade)
+  lesson               Lesson      @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  payment              Payment?
+  createdAt            DateTime    @default(now())
+  updatedAt            DateTime    @updatedAt
+
+  @@unique([buyerId, lessonId])
+  @@index([status])
+  @@index([lessonId])
+}
+
+model Payment {
+  id          Int           @id @default(autoincrement())
+  orderId     Int           @unique
+  userId      Int
+  status      PaymentStatus @default(PENDING)
+  method      String        @default("UNKNOWN") @db.VarChar(64)
+  reference   String?       @unique @db.VarChar(191)
+  amount      Decimal       @db.Decimal(10, 2)
+  paidAt      DateTime?
+  failedAt    DateTime?
+  cancelledAt DateTime?
+  order       Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@index([userId])
+  @@index([status])
+}
+
+model Review {
+  id               Int              @id @default(autoincrement())
+  reviewerId       Int
+  teacherId        Int?
+  lessonId         Int?
+  rating           Int
+  comment          String           @db.Text
+  moderationStatus ModerationStatus @default(PENDING)
+  reviewer         User             @relation("ReviewAuthor", fields: [reviewerId], references: [id], onDelete: Cascade)
+  teacher          User?            @relation("ReviewTargetTeacher", fields: [teacherId], references: [id], onDelete: Cascade)
+  lesson           Lesson?          @relation(fields: [lessonId], references: [id], onDelete: SetNull)
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  @@unique([reviewerId, lessonId])
+  @@index([reviewerId])
+  @@index([teacherId])
+  @@index([lessonId])
+  @@index([teacherId, createdAt])
+  @@index([lessonId, createdAt])
+}
+
+model Follow {
+  id          Int      @id @default(autoincrement())
+  followerId  Int
+  followingId Int
+  follower    User     @relation("FollowSource", fields: [followerId], references: [id], onDelete: Cascade)
+  following   User     @relation("FollowTarget", fields: [followingId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+
+  @@unique([followerId, followingId])
+  @@index([followingId])
+}
+
+model Notification {
+  id          Int              @id @default(autoincrement())
+  userId      Int
+  actorId     Int?
+  type        NotificationType @default(SYSTEM)
+  title       String
+  content     String?          @db.Text
+  actionUrl   String?          @db.VarChar(1024)
+  actionLabel String?          @db.VarChar(191)
+  entityType  String?          @db.VarChar(64)
+  entityId    Int?
+  metadata    Json?
+  isRead      Boolean          @default(false)
+  readAt      DateTime?
+  user        User             @relation("NotificationRecipient", fields: [userId], references: [id], onDelete: Cascade)
+  actor       User?            @relation("NotificationActor", fields: [actorId], references: [id], onDelete: SetNull)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  @@index([userId])
+  @@index([userId, isRead])
+  @@index([userId, createdAt])
+  @@index([type])
+}
+
+model LessonFavorite {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  lessonId  Int
+  source    String?  @db.VarChar(64)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lesson    Lesson   @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, lessonId])
+  @@index([userId])
+  @@index([lessonId])
+}
+
+model Post {
+  id               Int              @id @default(autoincrement())
+  authorId         Int
+  title            String?
+  content          String           @db.Text
+  category         String           @default("General") @db.VarChar(100)
+  tags             String?          @db.Text
+  imageUrl         String?
+  moderationStatus ModerationStatus @default(PENDING)
+  author           User             @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  comments         Comment[]
+  reactions        PostReaction[]
+  reports          Report[]         @relation("ReportTargetPost")
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  @@index([authorId])
+  @@index([category])
+  @@index([createdAt])
+}
+
+model Comment {
+  id               Int              @id @default(autoincrement())
+  postId           Int
+  authorId         Int
+  parentId         Int?
+  content          String           @db.Text
+  moderationStatus ModerationStatus @default(PENDING)
+  post             Post             @relation(fields: [postId], references: [id], onDelete: Cascade)
+  author           User             @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  parent           Comment?         @relation("CommentThread", fields: [parentId], references: [id], onDelete: Cascade)
+  replies          Comment[]        @relation("CommentThread")
+  reports          Report[]         @relation("ReportTargetComment")
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  @@index([postId])
+  @@index([authorId])
+  @@index([parentId])
+}
+
+model PostReaction {
+  id        Int              @id @default(autoincrement())
+  postId    Int
+  userId    Int
+  type      PostReactionType
+  post      Post             @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime         @default(now())
+
+  @@unique([postId, userId, type])
+  @@index([userId])
+  @@index([type])
+  @@index([postId, type])
+}
+
+model Wallet {
+  id           Int                 @id @default(autoincrement())
+  userId       Int                 @unique
+  balance      Decimal             @default(0) @db.Decimal(12, 2)
+  currency     String              @default("VND") @db.VarChar(8)
+  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions WalletTransaction[]
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+}
+
+model WalletTransaction {
+  id                   Int                     @id @default(autoincrement())
+  walletId             Int
+  actorId              Int?
+  payoutAccountId      Int?
+  amount               Decimal                 @db.Decimal(12, 2)
+  type                 String                  @db.VarChar(32)
+  status               WalletTransactionStatus @default(COMPLETED)
+  note                 String?                 @db.Text
+  reference            String?                 @db.VarChar(191)
+  metadata             Json?
+  wallet               Wallet                  @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  actor                User?                   @relation("WalletTransactionActor", fields: [actorId], references: [id], onDelete: SetNull)
+  payoutAccount        PayoutAccount?          @relation(fields: [payoutAccountId], references: [id], onDelete: SetNull)
+  createdAt            DateTime                @default(now())
+  updatedAt            DateTime                @updatedAt
+
+  @@index([walletId])
+  @@index([walletId, createdAt])
+  @@index([actorId])
+  @@index([status])
+  @@index([payoutAccountId])
+}
+
+model PayoutAccount {
+  id                    Int                      @id @default(autoincrement())
+  userId                Int
+  targetType            PayoutTargetType
+  providerName          String                   @db.VarChar(120)
+  accountIdentifier     String                   @db.VarChar(191)
+  accountOwnerName      String                   @db.VarChar(191)
+  isDefault             Boolean                  @default(false)
+  isVerified            Boolean                  @default(false)
+  verificationStatus    PayoutVerificationStatus @default(PENDING)
+  verificationMessage   String?                  @db.Text
+  verifiedAt            DateTime?
+  user                  User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  withdrawalTransactions WalletTransaction[]
+  createdAt             DateTime                 @default(now())
+  updatedAt             DateTime                 @updatedAt
+
+  @@unique([userId, targetType, accountIdentifier])
+  @@index([userId])
+  @@index([userId, targetType, isDefault])
+}
+
+model Report {
+  id              Int          @id @default(autoincrement())
+  reporterId      Int
+  targetUserId    Int?
+  targetLessonId  Int?
+  targetPostId    Int?
+  targetCommentId Int?
+  reason          String       @db.Text
+  category        String       @default("Other") @db.VarChar(100)
+  status          ReportStatus @default(OPEN)
+  resolutionNote  String?      @db.Text
+  reviewedById    Int?
+  reporter        User         @relation("ReportReporter", fields: [reporterId], references: [id], onDelete: Cascade)
+  targetUser      User?        @relation("ReportTargetUser", fields: [targetUserId], references: [id], onDelete: SetNull)
+  targetLesson    Lesson?      @relation("ReportTargetLesson", fields: [targetLessonId], references: [id], onDelete: SetNull)
+  targetPost      Post?        @relation("ReportTargetPost", fields: [targetPostId], references: [id], onDelete: SetNull)
+  targetComment   Comment?     @relation("ReportTargetComment", fields: [targetCommentId], references: [id], onDelete: SetNull)
+  reviewedBy      User?        @relation("ReportModerator", fields: [reviewedById], references: [id], onDelete: SetNull)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@index([reporterId])
+  @@index([status])
+  @@index([targetUserId])
+  @@index([targetLessonId])
+  @@index([targetPostId])
+  @@index([targetCommentId])
+}
