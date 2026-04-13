@@ -15,13 +15,28 @@ const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID?.trim() ?? '';
 
 const requestGoogleIdToken = (): Promise<string> =>
   new Promise((resolve, reject) => {
+    console.info('[Google Login][UI] Google sign-in flow started', {
+      hasClientId: Boolean(googleClientId),
+      clientIdSuffix: googleClientId ? googleClientId.slice(-16) : null,
+    });
+
     if (!googleClientId) {
+      console.error('[Google Login][UI] VITE_GOOGLE_CLIENT_ID is not set or empty');
       reject(new Error('Google Sign-In is not configured.'));
       return;
     }
 
     const googleApi = window.google?.accounts?.id;
+    console.info('[Google Login][UI] GIS availability check', {
+      hasGoogleObject: Boolean(window.google),
+      hasAccountsNamespace: Boolean(window.google?.accounts),
+      hasGoogleIdApi: Boolean(googleApi),
+    });
+
     if (!googleApi) {
+      console.error(
+        '[Google Login][UI] window.google?.accounts?.id is undefined — GIS script may not have loaded',
+      );
       reject(new Error('Google Sign-In is unavailable. Please refresh and try again.'));
       return;
     }
@@ -33,6 +48,7 @@ const requestGoogleIdToken = (): Promise<string> =>
       }
 
       settled = true;
+      console.error('[Google Login][UI] Flow timed out before credential callback');
       reject(new Error('Google sign-in timed out. Please try again.'));
     }, GOOGLE_SIGN_IN_TIMEOUT_MS);
 
@@ -46,36 +62,74 @@ const requestGoogleIdToken = (): Promise<string> =>
       callback();
     };
 
-    googleApi.initialize({
-      client_id: googleClientId,
-      ux_mode: 'popup',
-      callback: (response) => {
-        const credential =
-          typeof response.credential === 'string' ? response.credential.trim() : '';
+    try {
+      googleApi.initialize({
+        client_id: googleClientId,
+        ux_mode: 'popup',
+        callback: (response) => {
+          const credential =
+            typeof response.credential === 'string' ? response.credential.trim() : '';
 
-        if (!credential) {
-          settle(() => reject(new Error('Google did not return an ID token. Please try again.')));
-          return;
-        }
+          console.info('[Google Login][UI] GIS credential callback fired', {
+            hasCredential: Boolean(credential),
+            credentialLength: credential.length,
+          });
 
-        settle(() => resolve(credential));
-      },
-    });
+          if (!credential) {
+            settle(() => {
+              console.error('[Google Login][UI] GIS callback returned empty credential');
+              reject(new Error('Google did not return an ID token. Please try again.'));
+            });
+            return;
+          }
+
+          settle(() => resolve(credential));
+        },
+      });
+      console.info('[Google Login][UI] google.accounts.id.initialize completed');
+    } catch (err) {
+      console.error('[Google Login][UI] googleApi.initialize threw:', err);
+      reject(new Error('Google Sign-In failed to initialize. Please refresh and try again.'));
+      return;
+    }
 
     googleApi.prompt((notification) => {
       if (settled) {
         return;
       }
 
-      if (notification?.isNotDisplayed?.()) {
+      const isNotDisplayed = notification?.isNotDisplayed?.() ?? false;
+      const notDisplayedReason = notification?.getNotDisplayedReason?.() ?? null;
+      const isSkippedMoment = notification?.isSkippedMoment?.() ?? false;
+      const skippedReason = notification?.getSkippedReason?.() ?? null;
+      const isDismissedMoment = notification?.isDismissedMoment?.() ?? false;
+      const dismissedReason = notification?.getDismissedReason?.() ?? null;
+
+      console.info('[Google Login][UI] GIS prompt callback fired', {
+        isNotDisplayed,
+        notDisplayedReason,
+        isSkippedMoment,
+        skippedReason,
+        isDismissedMoment,
+        dismissedReason,
+      });
+
+      if (isNotDisplayed) {
+        const reason = notDisplayedReason ?? 'unknown';
+        console.error(`[Google Login][UI] Popup not displayed. Reason: ${reason}`);
         settle(() =>
           reject(new Error('Google Sign-In is currently unavailable. Please try again.')),
         );
         return;
       }
 
-      if (notification?.isSkippedMoment?.()) {
+      if (isSkippedMoment) {
         settle(() => reject(new Error('Google sign-in was cancelled.')));
+        return;
+      }
+
+      if (isDismissedMoment && dismissedReason !== 'credential_returned') {
+        settle(() => reject(new Error('Google sign-in was dismissed.')));
       }
     });
   });
@@ -219,6 +273,11 @@ export const AuthPage: React.FC = () => {
           : isAppError(error)
             ? error.message
             : t('auth.unableToSignInProvider');
+      console.error('[Google Login] Login failed:', {
+        error: error instanceof Error ? error.message : String(error),
+        statusCode: isAppError(error) ? error.statusCode : undefined,
+        stack: error instanceof Error ? error.stack : undefined,
+      });
       showToast({ type: 'error', message });
     } finally {
       setProviderLoading(null);

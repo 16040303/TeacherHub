@@ -302,6 +302,10 @@ export const loginWithProvider = async (
     });
   }
 
+  console.info('[Google Login][Frontend] Calling /api/auth/google', {
+    idTokenLength: idToken.length,
+  });
+
   try {
     const sessionDto = await apiRequest<AuthSessionDto>('/api/auth/google', {
       method: 'POST',
@@ -309,11 +313,31 @@ export const loginWithProvider = async (
       includeAuth: false,
     });
 
+    console.info('[Google Login][Frontend] /api/auth/google success', {
+      statusCode: 200,
+      responseBody: {
+        userId: sessionDto.user?.id,
+        email: sessionDto.user?.email,
+        role: sessionDto.user?.role,
+        expiresAt: sessionDto.expiresAt,
+      },
+    });
+
     const session = toSessionFromDto(sessionDto);
     writeStoredSession(session);
     return session;
   } catch (error) {
     const parsed = parseApiError(error);
+
+    const responseBody = isRecord(parsed.raw)
+      ? (isRecord(parsed.raw.raw) ? parsed.raw.raw : parsed.raw)
+      : parsed.raw;
+
+    console.error('[Google Login][Frontend] /api/auth/google failed', {
+      statusCode: parsed.statusCode,
+      message: parsed.message,
+      responseBody,
+    });
 
     throwAuthApiUnavailableIfNeeded(parsed, '/api/auth/google');
 

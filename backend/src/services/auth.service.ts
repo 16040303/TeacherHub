@@ -561,6 +561,12 @@ export const googleLogin = async (
 
     return issuedSession.authResponse;
   } catch (error) {
+    console.error('[Google Login] Backend verifyGoogleIdToken failed:', {
+      error: error instanceof Error ? error.message : String(error),
+      statusCode: error instanceof HttpError ? error.statusCode : undefined,
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+
     await logAuthAuditEvent({
       event: AuthAuditEvent.LOGIN_FAILED,
       success: false,

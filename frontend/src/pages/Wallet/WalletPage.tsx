@@ -450,6 +450,20 @@ export const WalletPage: React.FC = () => {
     void refresh();
   }, [refresh]);
 
+  // Detect VNPay return: refresh wallet status when user comes back from VNPay gateway
+  useEffect(() => {
+    const responseCode = searchParams.get('vnp_ResponseCode');
+    if (!responseCode) return;
+
+    // Clean up VNPay query params from URL without full page reload
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete('vnp_ResponseCode');
+    // Keep other params (vnp_TxnRef, vnp_Amount, etc.) for reference
+    setSearchParams(nextParams, { replace: true });
+
+    void refresh();
+  }, [refresh, searchParams, setSearchParams]);
+
   const totalCompletedIncoming = useMemo(
     () =>
       transactions
@@ -707,6 +721,15 @@ export const WalletPage: React.FC = () => {
         paymentMethod: topUpMethod,
         note: topUpNote.trim() || undefined,
       });
+
+      // Only auto-redirect when the selected payment method is VNPay
+      // and the top-up result is pending with a valid `paymentUrl`.
+      if (result.paymentUrl && result.status === 'pending') {
+        setTopUpResult(result);
+        showToast({ type: 'info', message: 'Redirecting to VNPAY...' });
+        window.location.href = result.paymentUrl;
+        return; // User has left — no refresh needed
+      }
 
       setTopUpResult(result);
       showToast({

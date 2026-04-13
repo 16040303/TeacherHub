@@ -7,6 +7,84 @@ import { isAppError } from '../../utils/api-error';
 
 type VerifyState = 'loading' | 'success' | 'error';
 
+interface VerifyEmailResult {
+  message: string;
+}
+
+const pendingVerifyRequests = new Map<string, Promise<VerifyEmailResult>>();
+
+type CompletedVerifyCacheEntry = {
+  result: VerifyEmailResult;
+  createdAt: number;
+};
+
+const completedVerifyResults = new Map<string, CompletedVerifyCacheEntry>();
+const MAX_COMPLETED_VERIFY_RESULTS = 100;
+const COMPLETED_VERIFY_RESULT_TTL_MS = 60_000;
+
+const getCompletedVerifyResult = (token: string): VerifyEmailResult | null => {
+  const entry = completedVerifyResults.get(token);
+  if (!entry) {
+    return null;
+  }
+
+  const isExpired = Date.now() - entry.createdAt > COMPLETED_VERIFY_RESULT_TTL_MS;
+  if (isExpired) {
+    completedVerifyResults.delete(token);
+    return null;
+  }
+
+  return entry.result;
+};
+
+const rememberCompletedVerifyResult = (
+  token: string,
+  result: VerifyEmailResult,
+): void => {
+  if (completedVerifyResults.has(token)) {
+    completedVerifyResults.delete(token);
+  }
+
+  completedVerifyResults.set(token, {
+    result,
+    createdAt: Date.now(),
+  });
+
+  if (completedVerifyResults.size > MAX_COMPLETED_VERIFY_RESULTS) {
+    const oldestToken = completedVerifyResults.keys().next().value;
+    if (typeof oldestToken === 'string') {
+      completedVerifyResults.delete(oldestToken);
+    }
+  }
+};
+
+const verifyEmailOnce = (
+  token: string,
+  verifyEmail: (value: string) => Promise<VerifyEmailResult>,
+): Promise<VerifyEmailResult> => {
+  const completed = getCompletedVerifyResult(token);
+  if (completed) {
+    return Promise.resolve(completed);
+  }
+
+  const existing = pendingVerifyRequests.get(token);
+  if (existing) {
+    return existing;
+  }
+
+  const request = verifyEmail(token)
+    .then((result) => {
+      rememberCompletedVerifyResult(token, result);
+      return result;
+    })
+    .finally(() => {
+      pendingVerifyRequests.delete(token);
+    });
+
+  pendingVerifyRequests.set(token, request);
+  return request;
+};
+
 export const VerifyEmailPage: React.FC = () => {
   const [searchParams] = useSearchParams();
   const token = searchParams.get('token') ?? '';
@@ -29,7 +107,7 @@ export const VerifyEmailPage: React.FC = () => {
 
     const verify = async (): Promise<void> => {
       try {
-        const result = await verifyEmail(token);
+        const result = await verifyEmailOnce(token, verifyEmail);
         if (!active) return;
         setState('success');
         setMessage(result.message);

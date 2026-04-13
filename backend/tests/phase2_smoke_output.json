@@ -4,14 +4,14 @@
     "teacherEmail":  "teacher.smoke@test.com",
     "studentEmail":  "student.smoke@test.com",
     "lessonIds":  {
-                      "paidA":  10,
-                      "paidB":  11,
-                      "freeC":  12
+                      "paidA":  13,
+                      "paidB":  14,
+                      "freeC":  15
                   },
     "orderIds":  {
-                     "orderA":  10,
-                     "orderB":  11,
-                     "orderC":  12
+                     "orderA":  13,
+                     "orderB":  14,
+                     "orderC":  15
                  },
     "checks":  {
                    "createListDetail":  "ok",

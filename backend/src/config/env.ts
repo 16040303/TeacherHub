@@ -209,7 +209,7 @@ const configuredVnpayIpnUrl = parseOptionalHttpUrl(
 
 const fallbackVnpayUrl = "https://sandbox.vnpayment.vn/paymentv2/vpcpay.html";
 const fallbackVnpayReturnUrl = `${frontendUrl.replace(/\/$/, "")}/wallet`;
-const fallbackVnpayIpnUrl = `http://localhost:${port}/api/wallet/topup/vnpay/ipn`;
+const fallbackVnpayIpnUrl = `http://localhost:${port}/api/wallet/topups/vnpay/ipn`;
 
 export const env = {
   NODE_ENV: nodeEnv,
