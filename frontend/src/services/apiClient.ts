@@ -1,12 +1,20 @@
 import { API_BASE_URL } from '../app/config/constants';
 import { STORAGE_KEYS } from '../app/config/storage';
-import type { ApiResponse } from '../types';
 import { parseApiError } from '../utils/api-error';
 
 export interface ApiRequestOptions extends Omit<RequestInit, 'body'> {
   body?: unknown;
   authToken?: string;
   includeAuth?: boolean;
+}
+
+/**
+ * Standard backend envelope shape: { success, message, data? }
+ */
+interface BackendEnvelope<T> {
+  success: boolean;
+  message: string;
+  data?: T;
 }
 
 const buildUrl = (path: string): string => {
@@ -17,8 +25,7 @@ const buildUrl = (path: string): string => {
   let normalizedBase = API_BASE_URL.replace(/\/$/, '');
   const normalizedPath = path.startsWith('/') ? path : `/${path}`;
 
-  // When VITE_API_URL already ends with `/api` but callers use paths like `/api/auth/...`,
-  // avoid `.../api/api/...` (404) — common with .env examples that set base to `http://host:port/api`.
+  // Avoid /api/api/... when VITE_API_URL already ends with /api.
   if (normalizedPath.startsWith('/api/') && /\/api$/i.test(normalizedBase)) {
     normalizedBase = normalizedBase.replace(/\/api$/i, '');
   }
@@ -33,15 +40,24 @@ const readStoredToken = (): string | undefined => {
 
   try {
     const raw = window.localStorage.getItem(STORAGE_KEYS.authSession);
-    if (!raw) {
-      return undefined;
-    }
+    if (!raw) return undefined;
 
     const parsed = JSON.parse(raw) as { token?: unknown };
-    return typeof parsed.token === 'string' && parsed.token.trim() ? parsed.token.trim() : undefined;
+    return typeof parsed.token === 'string' && parsed.token.trim()
+      ? parsed.token.trim()
+      : undefined;
   } catch {
     return undefined;
   }
+};
+
+const isEnvelope = (parsed: unknown): parsed is BackendEnvelope<unknown> => {
+  return (
+    typeof parsed === 'object' &&
+    parsed !== null &&
+    'success' in parsed &&
+    'message' in parsed
+  );
 };
 
 const extractPayload = async <T>(response: Response): Promise<T> => {
@@ -54,14 +70,14 @@ const extractPayload = async <T>(response: Response): Promise<T> => {
   }
 
   if (!response.ok) {
+    const envelope = isEnvelope(parsed) ? parsed : null;
     throw parseApiError({
-      ...(typeof parsed === 'object' && parsed !== null ? parsed : {}),
-      statusCode: response.status,
-      status: response.status,
       message:
-        typeof (parsed as { message?: unknown } | null)?.message === 'string'
+        envelope?.message ??
+        (typeof (parsed as { message?: unknown } | null)?.message === 'string'
           ? (parsed as { message: string }).message
-          : `Request failed with status ${response.status}`,
+          : `Request failed with status ${response.status}`),
+      statusCode: response.status,
       raw: parsed,
     });
   }
@@ -70,8 +86,14 @@ const extractPayload = async <T>(response: Response): Promise<T> => {
     return undefined as T;
   }
 
+  // Prefer standard envelope: { success, message, data }
+  if (isEnvelope(parsed) && 'data' in parsed) {
+    return parsed.data as T;
+  }
+
+  // Legacy envelope: { data } without success flag
   if (typeof parsed === 'object' && parsed !== null && 'data' in parsed) {
-    return (parsed as ApiResponse<T>).data;
+    return (parsed as { data: T }).data;
   }
 
   return parsed as T;
@@ -99,8 +121,8 @@ export const apiRequest = async <T>(
     ...(headers instanceof Headers
       ? Object.fromEntries(headers.entries())
       : Array.isArray(headers)
-      ? Object.fromEntries(headers)
-      : (headers as Record<string, string> | undefined) ?? {}),
+        ? Object.fromEntries(headers)
+        : ((headers as Record<string, string> | undefined) ?? {})),
   };
 
   if (resolvedToken) {

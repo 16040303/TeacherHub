@@ -19,7 +19,6 @@ export const parseBackendUserRole = (role: unknown): BackendUserRole | undefined
   if (role === 'TEACHER' || role === 'STUDENT' || role === 'ADMIN') {
     return role;
   }
-
   return undefined;
 };
 
@@ -30,9 +29,7 @@ export const parseBackendUserRole = (role: unknown): BackendUserRole | undefined
  * for current UI authorization behavior. This is not a backend role equivalence.
  */
 export const mapBackendRole = (role: string | BackendUserRole): UserRole => {
-  const normalized = role.trim().toUpperCase();
-
-  switch (normalized) {
+  switch (role.trim().toUpperCase()) {
     case 'ADMIN':
       return 'admin';
     case 'TEACHER':
@@ -51,9 +48,7 @@ export const mapBackendUserId = (id: number | string): string => {
 };
 
 export const mapBackendUserStatus = (status: string | BackendUserStatus): UserStatus => {
-  const normalized = status.trim().toUpperCase();
-
-  switch (normalized) {
+  switch (status.trim().toUpperCase()) {
     case 'ACTIVE':
       return 'active';
     case 'SUSPENDED':
@@ -63,18 +58,15 @@ export const mapBackendUserStatus = (status: string | BackendUserStatus): UserSt
     case 'LOCKED':
       return 'locked';
     default:
-      return throwUnsupportedStatus('backend user status', normalized);
+      return throwUnsupportedStatus('backend user status', status);
   }
 };
 
 /**
  * Canonical runtime boundary for inbound backend order status values.
- * Accepts both backend enum casing and canonical frontend casing.
  */
 export const mapBackendOrderStatus = (status: string | BackendOrderStatus): OrderStatus => {
-  const normalized = status.trim().toUpperCase();
-
-  switch (normalized) {
+  switch (status.trim().toUpperCase()) {
     case 'PAID':
       return 'paid';
     case 'FAILED':
@@ -84,7 +76,7 @@ export const mapBackendOrderStatus = (status: string | BackendOrderStatus): Orde
     case 'PENDING':
       return 'pending';
     default:
-      return throwUnsupportedStatus('backend order status', normalized);
+      return throwUnsupportedStatus('backend order status', status);
   }
 };
 
@@ -93,12 +85,8 @@ export const mapBackendOrderStatus = (status: string | BackendOrderStatus): Orde
  *
  * `CANCELLED` is preserved explicitly as `cancelled` (not folded into `pending`).
  */
-export const mapBackendPaymentStatus = (
-  status: string | BackendPaymentStatus,
-): PaymentStatus => {
-  const normalized = status.trim().toUpperCase();
-
-  switch (normalized) {
+export const mapBackendPaymentStatus = (status: string | BackendPaymentStatus): PaymentStatus => {
+  switch (status.trim().toUpperCase()) {
     case 'PAID':
     case 'SUCCESS':
       return 'success';
@@ -109,7 +97,7 @@ export const mapBackendPaymentStatus = (
     case 'CANCELLED':
       return 'cancelled';
     default:
-      return throwUnsupportedStatus('backend payment status', normalized);
+      return throwUnsupportedStatus('backend payment status', status);
   }
 };
 
@@ -134,10 +122,11 @@ export const mapBackendUser = (
     email: dto.email,
     role: mapBackendRole(dto.role),
     backendRole: dto.role,
-    status: mapBackendUserStatus(dto.status),
+    // status is optional in DTO — default to 'active' when not returned (e.g. auth response)
+    status: dto.status ? mapBackendUserStatus(dto.status) : 'active',
     avatar: dto.avatarUrl || undefined,
     bio: dto.bio || undefined,
     createdAt: dto.createdAt,
-    language: 'en', // default boundary property since backend doesn't track this yet
+    language: 'en',
   };
 };

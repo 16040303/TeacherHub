@@ -57,6 +57,26 @@ app.use(
   })
 );
 
+app.use((_req: Request, res: Response, next: NextFunction) => {
+  const originalJson = res.json.bind(res);
+
+  res.json = ((body?: unknown) => {
+    if (body && typeof body === "object" && !Array.isArray(body)) {
+      const responseBody = body as Record<string, unknown>;
+      if (!("success" in responseBody) && "message" in responseBody) {
+        return originalJson({
+          success: res.statusCode < 400,
+          ...responseBody,
+        });
+      }
+    }
+
+    return originalJson(body);
+  }) as Response["json"];
+
+  next();
+});
+
 if (env.UPLOADS_PUBLIC_ENABLED) {
   app.use("/uploads", express.static("uploads"));
 }
@@ -79,9 +99,12 @@ app.get("/", (_req: Request, res: Response) => {
 
 app.get("/health", (_req: Request, res: Response) => {
   res.status(200).json({
-    status: "ok",
-    service: "teacherhub-backend",
-    environment: env.NODE_ENV,
+    message: "Service health retrieved successfully",
+    data: {
+      status: "ok",
+      service: "teacherhub-backend",
+      environment: env.NODE_ENV,
+    },
   });
 });
 

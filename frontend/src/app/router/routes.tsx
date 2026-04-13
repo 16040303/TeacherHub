@@ -15,6 +15,8 @@ import { WalletPage } from '../../pages/Wallet/WalletPage';
 import { PayoutAccountsPage } from '../../pages/Wallet/PayoutAccountsPage';
 import { ProfilePage } from '../../pages/Profile/ProfilePage';
 import { AuthPage } from '../../pages/Auth/AuthPage';
+import { VerifyEmailPage } from '../../pages/Auth/VerifyEmailPage';
+import { ResetPasswordPage } from '../../pages/Auth/ResetPasswordPage';
 import { AccessDeniedPage } from '../../pages/AccessDenied/AccessDeniedPage';
 import { NotFoundPage } from '../../pages/NotFound/NotFoundPage';
 import { SettingsPage } from '../../pages/Settings/SettingsPage';
@@ -39,6 +41,8 @@ export const routes: RouteObject[] = [
       { path: 'privacy', element: <PrivacyPage /> },
       { path: 'terms', element: <TermsPage /> },
       { path: 'access-denied', element: <AccessDeniedPage /> },
+      { path: 'verify-email', element: <VerifyEmailPage /> },
+      { path: 'reset-password', element: <ResetPasswordPage /> },
       {
         element: <GuestGuard />,
         children: [{ path: 'login', element: <AuthPage /> }],

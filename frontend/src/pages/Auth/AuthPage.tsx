@@ -1,6 +1,6 @@
 import React, { FormEvent, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { ArrowLeft, KeyRound, Loader2, LogIn, UserPlus } from 'lucide-react';
+import { ArrowLeft, CheckCircle, KeyRound, Loader2, LogIn, Mail, UserPlus } from 'lucide-react';
 import type { AuthProvider as ExternalAuthProvider } from '../../types';
 import { useAuth } from '../../app/providers/AuthProvider';
 import { useLanguage } from '../../app/providers/LanguageProvider';
@@ -10,6 +10,76 @@ import { isAppError } from '../../utils/api-error';
 
 type AuthMode = 'login' | 'register' | 'forgot';
 
+const GOOGLE_SIGN_IN_TIMEOUT_MS = 60_000;
+const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID?.trim() ?? '';
+
+const requestGoogleIdToken = (): Promise<string> =>
+  new Promise((resolve, reject) => {
+    if (!googleClientId) {
+      reject(new Error('Google Sign-In is not configured.'));
+      return;
+    }
+
+    const googleApi = window.google?.accounts?.id;
+    if (!googleApi) {
+      reject(new Error('Google Sign-In is unavailable. Please refresh and try again.'));
+      return;
+    }
+
+    let settled = false;
+    const timeoutId = window.setTimeout(() => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      reject(new Error('Google sign-in timed out. Please try again.'));
+    }, GOOGLE_SIGN_IN_TIMEOUT_MS);
+
+    const settle = (callback: () => void): void => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      window.clearTimeout(timeoutId);
+      callback();
+    };
+
+    googleApi.initialize({
+      client_id: googleClientId,
+      ux_mode: 'popup',
+      callback: (response) => {
+        const credential =
+          typeof response.credential === 'string' ? response.credential.trim() : '';
+
+        if (!credential) {
+          settle(() => reject(new Error('Google did not return an ID token. Please try again.')));
+          return;
+        }
+
+        settle(() => resolve(credential));
+      },
+    });
+
+    googleApi.prompt((notification) => {
+      if (settled) {
+        return;
+      }
+
+      if (notification?.isNotDisplayed?.()) {
+        settle(() =>
+          reject(new Error('Google Sign-In is currently unavailable. Please try again.')),
+        );
+        return;
+      }
+
+      if (notification?.isSkippedMoment?.()) {
+        settle(() => reject(new Error('Google sign-in was cancelled.')));
+      }
+    });
+  });
+
 export const AuthPage: React.FC = () => {
   const [mode, setMode] = useState<AuthMode>('login');
   const [name, setName] = useState('');
@@ -17,8 +87,11 @@ export const AuthPage: React.FC = () => {
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [providerLoading, setProviderLoading] = useState<ExternalAuthProvider | null>(null);
+  const [registrationSuccess, setRegistrationSuccess] = useState(false);
+  const [registeredEmail, setRegisteredEmail] = useState('');
+  const [resendingVerification, setResendingVerification] = useState(false);
 
-  const { login, loginWithProvider, register, forgotPassword } = useAuth();
+  const { login, loginWithProvider, register, forgotPassword, resendVerification } = useAuth();
   const { showToast } = useToast();
   const { t } = useLanguage();
   const location = useLocation();
@@ -28,6 +101,28 @@ export const AuthPage: React.FC = () => {
     setName('');
     setEmail('');
     setPassword('');
+    setRegistrationSuccess(false);
+    setRegisteredEmail('');
+  };
+
+  const handleResendVerification = async (targetEmail: string): Promise<void> => {
+    if (resendingVerification) return;
+    setResendingVerification(true);
+
+    try {
+      const result = await resendVerification(targetEmail);
+      showToast({ type: 'success', message: result.message });
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : isAppError(error)
+            ? error.message
+            : 'Unable to resend verification email.';
+      showToast({ type: 'error', message });
+    } finally {
+      setResendingVerification(false);
+    }
   };
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
@@ -52,28 +147,38 @@ export const AuthPage: React.FC = () => {
       }
 
       if (mode === 'register') {
-        const session = await register({ name, email, password });
-        showToast({ type: 'success', message: t('auth.accountCreated') });
-        navigate(getDefaultAuthenticatedPath(session.user.role), { replace: true });
+        await register({ name, email, password });
+        // Do NOT auto-login — show verification message
+        setRegisteredEmail(email);
+        setRegistrationSuccess(true);
         return;
       }
 
-      const found = await forgotPassword(email);
+      const forgotResult = await forgotPassword(email);
       showToast({
         type: 'info',
-        message: found
-          ? t('auth.resetInstructions')
-          : t('auth.resetInstructionsGeneric'),
+        message: forgotResult.message || t('auth.resetInstructionsGeneric'),
       });
       setMode('login');
       setPassword('');
     } catch (error) {
+      const statusCode =
+        isAppError(error)
+          ? error.statusCode
+          : undefined;
       const message =
         error instanceof Error
           ? error.message
           : isAppError(error)
             ? error.message
             : t('auth.unableToComplete');
+
+      // Handle unverified email error on login
+      if (mode === 'login' && statusCode === 403) {
+        showToast({ type: 'info', message });
+        return;
+      }
+
       showToast({ type: 'error', message });
     } finally {
       setSubmitting(false);
@@ -88,7 +193,12 @@ export const AuthPage: React.FC = () => {
     setProviderLoading(provider);
 
     try {
-      const session = await loginWithProvider(provider);
+      const providerPayload =
+        provider === 'google'
+          ? { provider, idToken: await requestGoogleIdToken() }
+          : { provider };
+
+      const session = await loginWithProvider(providerPayload);
       showToast({
         type: 'success',
         message:
@@ -115,6 +225,61 @@ export const AuthPage: React.FC = () => {
     }
   };
 
+  // Registration success state
+  if (registrationSuccess) {
+    return (
+      <div className="mx-auto flex w-full max-w-lg flex-col gap-6 pb-12 pt-4">
+        <Link
+          to="/"
+          className="inline-flex w-fit items-center gap-2 text-sm font-semibold text-slate-500 transition hover:text-primary"
+        >
+          <ArrowLeft size={16} /> {t('auth.backToHome')}
+        </Link>
+
+        <div className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <div className="flex flex-col items-center gap-4 text-center">
+            <div className="flex h-16 w-16 items-center justify-center rounded-full bg-emerald-100 dark:bg-emerald-900/30">
+              <CheckCircle size={32} className="text-emerald-600 dark:text-emerald-400" />
+            </div>
+            <h1 className="text-2xl font-black tracking-tight">
+              Check your email
+            </h1>
+            <p className="text-sm font-medium leading-relaxed text-slate-500 dark:text-slate-400">
+              We've sent a verification link to{' '}
+              <strong className="text-slate-700 dark:text-slate-200">{registeredEmail}</strong>.
+              <br />
+              Please check your inbox and click the link to verify your account.
+            </p>
+            <p className="text-xs text-slate-400 dark:text-slate-500">
+              The link expires in 24 hours. Check your spam folder if you don't see it.
+            </p>
+
+            <div className="mt-4 flex flex-col gap-3 w-full">
+              <button
+                type="button"
+                onClick={() => void handleResendVerification(registeredEmail)}
+                disabled={resendingVerification}
+                className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 transition hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+              >
+                <Mail size={16} />
+                {resendingVerification ? 'Sending...' : 'Resend verification email'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setMode('login');
+                  resetForm();
+                }}
+                className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 text-sm font-bold text-white shadow-lg shadow-primary/20 transition hover:bg-primary-hover"
+              >
+                <LogIn size={16} /> Go to login
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto flex w-full max-w-lg flex-col gap-6 pb-12 pt-4">
@@ -207,7 +372,7 @@ export const AuthPage: React.FC = () => {
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
                 required
-                minLength={6}
+                minLength={8}
                 className="h-12 rounded-xl border border-slate-200 bg-slate-50 px-4 text-sm font-medium outline-none transition focus:border-primary focus:bg-white dark:border-slate-700 dark:bg-slate-800"
                 placeholder={t('auth.passwordPlaceholder')}
               />

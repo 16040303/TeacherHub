@@ -6,12 +6,12 @@ import React, {
   useMemo,
   useState,
 } from 'react';
-import type { AuthProvider as ExternalAuthProvider } from '../../types';
+import type {
+  ProviderLoginPayload,
+} from '../../types';
 import {
   AuthSession,
   LANGUAGES,
-  USER_ROLES,
-  USER_STATUSES,
 } from '../../types';
 import { authService } from '../../services/authService';
 import {
@@ -20,6 +20,7 @@ import {
   mapBackendUserStatus,
   parseBackendUserRole,
 } from '../../utils/mappers';
+import type { RegisterResult } from '../../repositories/authRepository';
 
 interface LoginInput {
   email: string;
@@ -39,12 +40,15 @@ interface AuthContextValue {
   isAuthenticated: boolean;
   isAdmin: boolean;
   login: (input: LoginInput) => Promise<AuthSession>;
-  loginWithProvider: (provider: ExternalAuthProvider) => Promise<AuthSession>;
-  register: (input: RegisterInput) => Promise<AuthSession>;
-  forgotPassword: (email: string) => Promise<boolean>;
+  loginWithProvider: (payload: ProviderLoginPayload) => Promise<AuthSession>;
+  register: (input: RegisterInput) => Promise<RegisterResult>;
+  forgotPassword: (email: string) => Promise<{ message: string }>;
+  resetPassword: (token: string, password: string) => Promise<{ message: string }>;
   logout: () => Promise<void>;
   refreshSession: () => Promise<AuthSession | null>;
   setSession: React.Dispatch<React.SetStateAction<AuthSession | null>>;
+  verifyEmail: (token: string) => Promise<{ message: string }>;
+  resendVerification: (email: string) => Promise<{ message: string }>;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -161,9 +165,9 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   }, []);
 
   const loginWithProvider = useCallback(
-    async (provider: ExternalAuthProvider): Promise<AuthSession> => {
+    async (payload: ProviderLoginPayload): Promise<AuthSession> => {
       const nextSession = requireSession(
-        normalizeSession(await authService.loginWithProvider({ provider })),
+        normalizeSession(await authService.loginWithProvider(payload)),
         'complete provider sign in',
       );
       setSession(nextSession);
@@ -172,17 +176,21 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     [],
   );
 
-  const register = useCallback(async (input: RegisterInput): Promise<AuthSession> => {
-    const nextSession = requireSession(
-      normalizeSession(await authService.register(input)),
-      'complete registration',
-    );
-    setSession(nextSession);
-    return nextSession;
+  const register = useCallback(async (input: RegisterInput): Promise<RegisterResult> => {
+    // Register no longer returns a session — just a message telling user to verify email
+    const result = await authService.register(input);
+    // Do NOT set session here — user must verify email first
+    return result;
   }, []);
 
   const forgotPassword = useCallback(
-    async (email: string): Promise<boolean> => authService.forgotPassword({ email }),
+    async (email: string): Promise<{ message: string }> => authService.forgotPassword({ email }),
+    [],
+  );
+
+  const resetPassword = useCallback(
+    async (token: string, password: string): Promise<{ message: string }> =>
+      authService.resetPassword({ token, password }),
     [],
   );
 
@@ -200,6 +208,14 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     setSession(nextSession);
     return nextSession;
   }, [session?.user?.id]);
+
+  const verifyEmail = useCallback(async (token: string): Promise<{ message: string }> => {
+    return authService.verifyEmail(token);
+  }, []);
+
+  const resendVerification = useCallback(async (email: string): Promise<{ message: string }> => {
+    return authService.resendVerification(email);
+  }, []);
 
   const rawUser = session?.user ?? null;
 
@@ -228,9 +244,12 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       loginWithProvider,
       register,
       forgotPassword,
+      resetPassword,
       logout,
       refreshSession,
       setSession,
+      verifyEmail,
+      resendVerification,
     }),
     [
       session,
@@ -242,9 +261,12 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       loginWithProvider,
       register,
       forgotPassword,
+      resetPassword,
       logout,
       refreshSession,
       setSession,
+      verifyEmail,
+      resendVerification,
     ],
   );
 

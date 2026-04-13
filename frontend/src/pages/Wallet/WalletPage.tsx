@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLanguage } from '../../app/providers/LanguageProvider';
 import {
   Wallet,
@@ -14,9 +14,7 @@ import {
   CheckCircle2,
   XCircle,
   RefreshCcw,
-  Building2,
   QrCode,
-  Smartphone,
   ChevronDown,
   ChevronUp,
   Repeat,
@@ -187,22 +185,10 @@ const PAYMENT_METHODS: Array<{
   icon: React.ReactNode;
 }> = [
   {
-    value: 'bank',
-    label: 'Bank',
-    helper: 'Transfer via bank gateway. Confirmation may take a little longer.',
-    icon: <Building2 size={18} />,
-  },
-  {
     value: 'vnpay',
     label: 'VNPAY',
     helper: 'Fast QR and card-compatible checkout flow.',
     icon: <QrCode size={18} />,
-  },
-  {
-    value: 'momo',
-    label: 'MoMo Wallet',
-    helper: 'Direct wallet payment with mobile confirmation.',
-    icon: <Smartphone size={18} />,
   },
 ];
 
@@ -389,6 +375,7 @@ export const WalletPage: React.FC = () => {
   const [topUpNote, setTopUpNote] = useState('');
   const [topUpError, setTopUpError] = useState<string | null>(null);
   const [topUpResult, setTopUpResult] = useState<TopUpPaymentSnapshot | null>(null);
+  const [topUpPolling, setTopUpPolling] = useState(false);
 
   const [withdrawAmount, setWithdrawAmount] = useState('150');
   const [withdrawTargetType, setWithdrawTargetType] = useState<WithdrawPayoutTargetType>('bank');
@@ -426,8 +413,9 @@ export const WalletPage: React.FC = () => {
     [topUpAmountVnd],
   );
 
-  const refresh = async (): Promise<void> => {
-    if (!user) {
+  const refresh = useCallback(async (): Promise<void> => {
+    const userId = user?.id;
+    if (!userId) {
       setLoading(false);
       return;
     }
@@ -437,10 +425,10 @@ export const WalletPage: React.FC = () => {
 
     try {
       const [wallet, txRows, chart, payoutAccounts] = await Promise.all([
-        walletService.getWallet(user.id),
-        walletService.listWalletTransactions(user.id),
-        walletService.getWalletAnalyticsSeries(user.id),
-        walletService.listLinkedPayoutAccounts(user.id),
+        walletService.getWallet(userId),
+        walletService.listWalletTransactions(userId),
+        walletService.getWalletAnalyticsSeries(userId),
+        walletService.listLinkedPayoutAccounts(userId),
       ]);
 
       setBalance(wallet.balance);
@@ -456,11 +444,11 @@ export const WalletPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [t, user?.id]);
 
   useEffect(() => {
     void refresh();
-  }, [user?.id]);
+  }, [refresh]);
 
   const totalCompletedIncoming = useMemo(
     () =>
@@ -664,8 +652,8 @@ export const WalletPage: React.FC = () => {
   };
 
   const canSubmitTopUp = useMemo(
-    () => Boolean(user) && !submittingTopup && !topUpValidationError,
-    [user, submittingTopup, topUpValidationError],
+    () => Boolean(user) && !submittingTopup && !topUpPolling && !topUpValidationError,
+    [user, submittingTopup, topUpPolling, topUpValidationError],
   );
 
   const canSubmitWithdraw = useMemo(() => {
@@ -736,6 +724,81 @@ export const WalletPage: React.FC = () => {
       setSubmittingTopup(false);
     }
   };
+
+  useEffect(() => {
+    const userId = user?.id;
+    const transactionId = topUpResult?.transactionId;
+    if (!userId || !transactionId || topUpResult.status !== 'pending') {
+      setTopUpPolling(false);
+      return;
+    }
+
+    let cancelled = false;
+    let timeoutId: number | null = null;
+    let currentIntervalMs = Math.max(1_000, Math.floor(topUpResult.pollIntervalMs ?? 5_000));
+
+    const schedule = (): void => {
+      if (cancelled) {
+        return;
+      }
+
+      timeoutId = window.setTimeout(() => {
+        void pollStatus();
+      }, currentIntervalMs);
+    };
+
+    const pollStatus = async (): Promise<void> => {
+      try {
+        const latest = await walletService.getTopupStatus(userId, transactionId);
+        if (cancelled) {
+          return;
+        }
+
+        if (latest.pollIntervalMs && Number.isFinite(latest.pollIntervalMs)) {
+          currentIntervalMs = Math.max(1_000, Math.floor(latest.pollIntervalMs));
+        }
+
+        setTopUpResult((current) => {
+          if (!current || current.transactionId !== transactionId) {
+            return current;
+          }
+
+          return latest;
+        });
+
+        if (latest.status === 'pending') {
+          schedule();
+          return;
+        }
+
+        setTopUpPolling(false);
+        showToast({
+          type: latest.status === 'success' ? 'success' : 'error',
+          message: latest.message,
+        });
+        await refresh();
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+
+        setTopUpPolling(false);
+        const message = error instanceof Error ? error.message : t('wallet.unableToLoadDetails');
+        setTopUpError(message);
+        showToast({ type: 'error', message });
+      }
+    };
+
+    setTopUpPolling(true);
+    schedule();
+
+    return () => {
+      cancelled = true;
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
+    };
+  }, [refresh, showToast, t, topUpResult?.pollIntervalMs, topUpResult?.status, topUpResult?.transactionId, user?.id]);
 
   const verifyWithdrawAccount = async (): Promise<void> => {
     const accountIdentifier = withdrawAccountIdentifier.trim();
@@ -1052,6 +1115,9 @@ export const WalletPage: React.FC = () => {
   }
 
   const topUpResultMeta = topUpResult ? TOP_UP_RESULT_META[topUpResult.status] : null;
+  const topUpPollingIntervalSeconds = Math.max(1, Math.floor((topUpResult?.pollIntervalMs ?? 5_000) / 1_000));
+  const topUpPaymentLink = topUpResult?.paymentUrl ?? topUpResult?.qrPayload ?? '';
+  const topUpExpiresLabel = topUpResult?.expiresAt ? toDateTimeLabel(topUpResult.expiresAt) : null;
   const withdrawIdentifierError = getWithdrawIdentifierError(
     withdrawTargetType,
     withdrawAccountIdentifier.trim(),
@@ -1312,14 +1378,52 @@ export const WalletPage: React.FC = () => {
                     <div className="mt-3 grid gap-2 text-xs opacity-90 md:grid-cols-2">
                       <span>Method: {toPaymentMethodLabel(topUpResult.paymentMethod)}</span>
                       <span>Payment ref: {topUpResult.paymentRef}</span>
+                      <span>Transaction ID: {topUpResult.transactionId}</span>
                       <span>Amount: {formatVnd(topUpResult.amountVnd)}</span>
                       <span>Coins: {formatCoins(topUpResult.coins)}</span>
                       <span>
                         Wallet tx status:{' '}
                         {(STATUS_META[topUpResult.transaction.status] ?? STATUS_META.pending).label}
                       </span>
+                      {topUpExpiresLabel ? <span>Expires at: {topUpExpiresLabel}</span> : null}
                       <span>Recorded: {toDateTimeLabel(topUpResult.transaction.date)}</span>
                     </div>
+
+                    {topUpResult.status === 'pending' ? (
+                      <div className="mt-3 inline-flex items-center gap-2 rounded-lg border border-amber-300/40 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-100">
+                        <Loader2 size={14} className={topUpPolling ? 'animate-spin' : ''} />
+                        Waiting for VNPAY confirmation. Auto-checking every {topUpPollingIntervalSeconds}s.
+                      </div>
+                    ) : null}
+
+                    {topUpPaymentLink ? (
+                      <div className="mt-3 flex flex-wrap items-center gap-2">
+                        <a
+                          href={topUpPaymentLink}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300/40 bg-white/10 px-3 py-1.5 text-xs font-bold transition hover:border-primary"
+                        >
+                          Open VNPAY checkout <ExternalLink size={12} />
+                        </a>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!navigator.clipboard) {
+                              showToast({ type: 'error', message: t('wallet.linkCopyError') });
+                              return;
+                            }
+                            void navigator.clipboard
+                              .writeText(topUpPaymentLink)
+                              .then(() => showToast({ type: 'success', message: t('wallet.linkCopied') }))
+                              .catch(() => showToast({ type: 'error', message: t('wallet.linkCopyError') }));
+                          }}
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300/40 bg-white/10 px-3 py-1.5 text-xs font-bold transition hover:border-primary"
+                        >
+                          {t('wallet.copyLink')}
+                        </button>
+                      </div>
+                    ) : null}
                   </>
                 ) : (
                   <p className="mt-2 text-sm opacity-90">
@@ -1343,8 +1447,16 @@ export const WalletPage: React.FC = () => {
                 disabled={!canSubmitTopUp}
                 className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 text-sm font-bold text-white transition hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-70"
               >
-                {submittingTopup ? <Loader2 size={16} className="animate-spin" /> : <CreditCard size={16} />}
-                {submittingTopup ? t('wallet.processingPayment') : `${t('wallet.proceedTo')} ${toPaymentMethodLabel(topUpMethod)}`}
+                {submittingTopup || topUpPolling ? (
+                  <Loader2 size={16} className="animate-spin" />
+                ) : (
+                  <CreditCard size={16} />
+                )}
+                {submittingTopup
+                  ? t('wallet.processingPayment')
+                  : topUpPolling
+                    ? 'Waiting for VNPAY confirmation...'
+                    : `${t('wallet.proceedTo')} ${toPaymentMethodLabel(topUpMethod)}`}
               </button>
             </div>
           </div>

@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { AuthRequest } from "../middlewares/auth.middleware";
 import * as communityService from "../services/community.service";
 import { handleControllerError } from "../utils/controller-error";
+import { sendSuccess } from "../utils/response";
 import {
   commentIdParamSchema,
   communityCommentCountsQuerySchema,
@@ -22,7 +23,7 @@ export const listCommunityPosts = async (
     const query = listCommunityPostsQuerySchema.parse(req.query);
     const posts = await communityService.listCommunityPosts(query);
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Community posts retrieved successfully",
       data: posts,
     });
@@ -39,7 +40,7 @@ export const getCommunityPostDetail = async (
     const { id } = postIdParamSchema.parse(req.params);
     const post = await communityService.getCommunityPostById(id);
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Community post retrieved successfully",
       data: post,
     });
@@ -61,7 +62,8 @@ export const createCommunityPost = async (
       payload
     );
 
-    res.status(201).json({
+    sendSuccess(res, {
+      statusCode: 201,
       message: "Community post created successfully",
       data: post,
     });
@@ -85,7 +87,7 @@ export const updateCommunityPost = async (
       payload
     );
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Community post updated successfully",
       data: post,
     });
@@ -104,7 +106,7 @@ export const deleteCommunityPost = async (
 
     await communityService.deleteCommunityPost(id, authReq.user.userId);
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Community post deleted successfully",
     });
   } catch (error) {
@@ -125,7 +127,7 @@ export const toggleCommunityPostLike = async (
       authReq.user.userId
     );
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Community post like status updated successfully",
       data: post,
     });
@@ -147,7 +149,7 @@ export const toggleCommunityPostSave = async (
       authReq.user.userId
     );
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Community post save status updated successfully",
       data: post,
     });
@@ -164,7 +166,7 @@ export const listCommunityComments = async (
     const { id } = postIdParamSchema.parse(req.params);
     const comments = await communityService.listCommunityComments(id);
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Community comments retrieved successfully",
       data: comments,
     });
@@ -188,7 +190,8 @@ export const createCommunityComment = async (
       payload
     );
 
-    res.status(201).json({
+    sendSuccess(res, {
+      statusCode: 201,
       message: "Community comment created successfully",
       data: comment,
     });
@@ -205,7 +208,7 @@ export const listCommunityCommentCounts = async (
     const query = communityCommentCountsQuerySchema.parse(req.query);
     const counts = await communityService.listCommunityCommentCounts(query.postIds);
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Community comment counts retrieved successfully",
       data: counts,
     });
@@ -229,7 +232,7 @@ export const updateCommunityComment = async (
       payload
     );
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Community comment updated successfully",
       data: comment,
     });
@@ -248,7 +251,7 @@ export const deleteCommunityComment = async (
 
     await communityService.deleteCommunityComment(id, authReq.user.userId);
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Community comment deleted successfully",
     });
   } catch (error) {
@@ -263,7 +266,7 @@ export const listTrendingTopics = async (
   try {
     const topics = await communityService.listTrendingTopics();
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Trending topics retrieved successfully",
       data: topics,
     });
@@ -285,7 +288,8 @@ export const createCommunityReport = async (
       payload
     );
 
-    res.status(201).json({
+    sendSuccess(res, {
+      statusCode: 201,
       message: "Report submitted successfully",
       data: report,
     });

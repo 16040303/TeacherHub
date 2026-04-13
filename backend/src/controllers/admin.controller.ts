@@ -3,6 +3,7 @@ import { AuthRequest } from "../middlewares/auth.middleware";
 import * as adminService from "../services/admin.service";
 import { handleControllerError } from "../utils/controller-error";
 import { HttpError } from "../utils/http-error";
+import { sendSuccess } from "../utils/response";
 import {
   adminReportIdParamSchema,
   adminUserIdParamSchema,
@@ -32,7 +33,7 @@ export const getAdminDashboardSnapshot = async (
     const query = dashboardSnapshotQuerySchema.parse(req.query);
     const snapshot = await adminService.getAdminDashboardSnapshot(query);
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Admin dashboard snapshot retrieved successfully",
       data: snapshot,
     });
@@ -48,7 +49,7 @@ export const getAdminDashboardStats = async (
   try {
     const stats = await adminService.getDashboardStats();
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Admin dashboard stats retrieved successfully",
       data: stats,
     });
@@ -62,7 +63,7 @@ export const listAdminUsers = async (req: Request, res: Response): Promise<void>
     const query = listAdminUsersQuerySchema.parse(req.query);
     const users = await adminService.listUsersForAdmin(query);
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Admin users retrieved successfully",
       data: users,
     });
@@ -80,7 +81,7 @@ export const getAdminUser = async (req: Request, res: Response): Promise<void> =
       throw new HttpError(404, "User not found");
     }
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Admin user retrieved successfully",
       data: user,
     });
@@ -95,7 +96,7 @@ export const updateAdminUser = async (req: Request, res: Response): Promise<void
     const payload = updateAdminUserSchema.parse(req.body);
     const user = await adminService.updateUserAsAdmin(id, payload);
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Admin user updated successfully",
       data: user,
     });
@@ -112,7 +113,7 @@ export const listAdminLessonsForModeration = async (
     const query = listLessonsForModerationQuerySchema.parse(req.query);
     const lessons = await adminService.listLessonsForModeration(query);
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Admin lesson moderation list retrieved successfully",
       data: lessons,
     });
@@ -133,7 +134,7 @@ export const getAdminLessonForModeration = async (
       throw new HttpError(404, "Lesson not found");
     }
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Admin lesson moderation detail retrieved successfully",
       data: lesson,
     });
@@ -155,7 +156,7 @@ export const moderateAdminLesson = async (
       getAdminUserId(req)
     );
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Lesson moderation updated successfully",
       data: updated,
     });
@@ -172,7 +173,7 @@ export const listAdminRecentTransactions = async (
     const query = listRecentTransactionsQuerySchema.parse(req.query);
     const transactions = await adminService.listRecentTransactions(query);
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Recent transactions retrieved successfully",
       data: transactions,
     });
@@ -189,7 +190,7 @@ export const listAdminCommunityForModeration = async (
     const query = listCommunityModerationQuerySchema.parse(req.query);
     const items = await adminService.listCommunityForModeration(query);
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Community moderation content retrieved successfully",
       data: items,
     });
@@ -206,7 +207,7 @@ export const removeAdminCommunityContent = async (
     const { id, contentType } = removeCommunityContentParamSchema.parse(req.params);
     await adminService.removeCommunityContent(id, contentType);
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Community content removed successfully",
       data: null,
     });
@@ -220,7 +221,7 @@ export const listAdminReports = async (req: Request, res: Response): Promise<voi
     const query = listAdminReportsQuerySchema.parse(req.query);
     const reports = await adminService.listReportsForAdmin(query);
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Admin reports retrieved successfully",
       data: reports,
     });
@@ -242,7 +243,7 @@ export const updateAdminReport = async (
       getAdminUserId(req)
     );
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Admin report updated successfully",
       data: report,
     });
@@ -256,7 +257,7 @@ export const listAdminOrders = async (req: Request, res: Response): Promise<void
     const query = listAdminOrdersQuerySchema.parse(req.query);
     const orders = await adminService.listOrdersForAdmin(query);
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Admin orders retrieved successfully",
       data: orders,
     });

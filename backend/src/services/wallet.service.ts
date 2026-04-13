@@ -4,13 +4,17 @@ import {
   Prisma,
   WalletTransactionStatus,
 } from "@prisma/client";
+import { createHmac } from "crypto";
+import { env } from "../config/env";
 import prisma from "../config/prisma";
 import { HttpError } from "../utils/http-error";
 import {
+  CreateTopupInput,
   CreateWithdrawalInput,
   ListWalletTransactionsQueryInput,
   UpsertPayoutAccountInput,
   VerifyPayoutAccountInput,
+  VnpayIpnQueryInput,
 } from "../validators/wallet.validator";
 
 interface PaginatedResult<T> {
@@ -78,6 +82,57 @@ interface PayoutAccountVerificationResult {
   verifiedAt: Date;
 }
 
+type TopupPaymentMethod = "vnpay";
+type TopupPaymentStatus = "success" | "failed" | "pending";
+
+interface TopupPaymentSnapshotView {
+  transactionId: number;
+  status: TopupPaymentStatus;
+  message: string;
+  amountVnd: number;
+  coins: number;
+  paymentMethod: TopupPaymentMethod;
+  paymentRef: string;
+  paymentUrl?: string;
+  qrPayload?: string;
+  expiresAt?: Date;
+  pollIntervalMs?: number;
+  transaction: WalletTransactionView;
+}
+
+interface VnpayIpnResponse {
+  RspCode: string;
+  Message: string;
+}
+
+const TOPUP_MIN_VND = 10_000;
+const TOPUP_MAX_VND = 20_000_000;
+const TOPUP_COIN_DIVISOR = 100;
+const VNPAY_STATUS_POLL_INTERVAL_MS = 5_000;
+const VNPAY_EXPIRE_MINUTES = 15;
+const VNPAY_VERSION = "2.1.0";
+const VNPAY_COMMAND = "pay";
+const VNPAY_CURRENCY = "VND";
+const VNPAY_LOCALE = "vn";
+const VNPAY_ORDER_TYPE = "other";
+const VNPAY_SUCCESS_CODE = "00";
+const VNPAY_CANCELLED_CODE = "24";
+const TOPUP_METHOD_NOT_SUPPORTED_MESSAGE =
+  "Only VNPAY top-up is currently supported in this phase.";
+const TOPUP_PENDING_MESSAGE =
+  "Payment session initialized. Complete payment in VNPAY to finish wallet top-up.";
+const TOPUP_SUCCESS_MESSAGE =
+  "Payment completed. Coins have been added to your wallet balance.";
+const TOPUP_FAILED_MESSAGE =
+  "Payment failed. Please retry with another VNPAY attempt.";
+const TOPUP_CANCELLED_MESSAGE =
+  "Payment was cancelled before completion.";
+const VNPAY_IPN_RESPONSE_SUCCESS_CODE = "00";
+const VNPAY_IPN_RESPONSE_ORDER_NOT_FOUND_CODE = "01";
+const VNPAY_IPN_RESPONSE_ALREADY_CONFIRMED_CODE = "02";
+const VNPAY_IPN_RESPONSE_INVALID_AMOUNT_CODE = "04";
+const VNPAY_IPN_RESPONSE_INVALID_CHECKSUM_CODE = "97";
+
 const DEFAULT_PROVIDER_BY_TARGET: Record<WithdrawPayoutTargetType, string> = {
   bank: "Vietcombank",
   momo: "MoMo Wallet",
@@ -88,6 +143,287 @@ const BANK_ACCOUNT_REGEX = /^\d{8,20}$/;
 const MOMO_PHONE_REGEX = /^\d{9,12}$/;
 const MOMO_WALLET_ID_REGEX = /^[a-zA-Z0-9._-]{6,32}$/;
 const PAYPAL_EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+const toTopupCoins = (amountVnd: number): number => {
+  return Math.floor(amountVnd / TOPUP_COIN_DIVISOR);
+};
+
+const resolveTopupAmountVnd = (
+  metadata: Record<string, unknown>,
+  transactionAmountCoins: number
+): number => {
+  const rawMetadataAmount = metadata.amountVnd;
+
+  if (typeof rawMetadataAmount === "number" && Number.isFinite(rawMetadataAmount)) {
+    return Math.max(0, Math.floor(rawMetadataAmount));
+  }
+
+  return Math.max(0, Math.floor(transactionAmountCoins * TOPUP_COIN_DIVISOR));
+};
+
+const toTopupStatus = (status: WalletTransactionStatus): TopupPaymentStatus => {
+  switch (status) {
+    case WalletTransactionStatus.COMPLETED:
+      return "success";
+    case WalletTransactionStatus.PENDING:
+      return "pending";
+    case WalletTransactionStatus.FAILED:
+    case WalletTransactionStatus.CANCELLED:
+    default:
+      return "failed";
+  }
+};
+
+const toJsonObject = (value: Prisma.JsonValue | null | undefined): Record<string, unknown> => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  return value as Record<string, unknown>;
+};
+
+const toStringRecord = (value: unknown): Record<string, unknown> => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  return value as Record<string, unknown>;
+};
+
+const mergeRecord = (
+  current: unknown,
+  patch: Record<string, unknown>
+): Prisma.InputJsonObject => {
+  return {
+    ...toStringRecord(current),
+    ...patch,
+  } as Prisma.InputJsonObject;
+};
+
+const padVnpDatePart = (value: number): string => value.toString().padStart(2, "0");
+
+const toVnpDate = (value: Date): string => {
+  const utcTime = value.getTime() + value.getTimezoneOffset() * 60_000;
+  const vietnamTime = new Date(utcTime + 7 * 60 * 60 * 1_000);
+
+  return [
+    vietnamTime.getFullYear(),
+    padVnpDatePart(vietnamTime.getMonth() + 1),
+    padVnpDatePart(vietnamTime.getDate()),
+    padVnpDatePart(vietnamTime.getHours()),
+    padVnpDatePart(vietnamTime.getMinutes()),
+    padVnpDatePart(vietnamTime.getSeconds()),
+  ].join("");
+};
+
+const encodeVnpValue = (value: string): string =>
+  encodeURIComponent(value).replace(/%20/g, "+");
+
+const toVnpaySignData = (params: Record<string, string>): string => {
+  const sortedKeys = Object.keys(params).sort((left, right) => left.localeCompare(right));
+
+  return sortedKeys
+    .map((key) => `${key}=${encodeVnpValue(params[key])}`)
+    .join("&");
+};
+
+const signVnpayParams = (params: Record<string, string>): string => {
+  const signData = toVnpaySignData(params);
+
+  return createHmac("sha512", env.VNPAY_HASH_SECRET)
+    .update(signData, "utf8")
+    .digest("hex");
+};
+
+const appendQueryToUrl = (baseUrl: string, query: string): string => {
+  const separator = baseUrl.includes("?") ? "&" : "?";
+  return `${baseUrl}${separator}${query}`;
+};
+
+const normalizeClientIp = (value?: string): string => {
+  const normalized = (value || "").trim();
+
+  if (!normalized) {
+    return "127.0.0.1";
+  }
+
+  if (normalized.includes(",")) {
+    return normalizeClientIp(normalized.split(",")[0]);
+  }
+
+  if (normalized === "::1") {
+    return "127.0.0.1";
+  }
+
+  if (normalized.startsWith("::ffff:")) {
+    return normalized.slice(7);
+  }
+
+  return normalized;
+};
+
+const ensureTopupAmount = (amountVnd: number): number => {
+  const normalized = Math.floor(Number(amountVnd));
+
+  if (!Number.isFinite(normalized) || normalized <= 0) {
+    throw new HttpError(400, "Top-up amount must be greater than zero");
+  }
+
+  if (normalized < TOPUP_MIN_VND) {
+    throw new HttpError(400, `Top-up amount must be at least ${TOPUP_MIN_VND} VND`);
+  }
+
+  if (normalized > TOPUP_MAX_VND) {
+    throw new HttpError(400, `Top-up amount cannot exceed ${TOPUP_MAX_VND} VND`);
+  }
+
+  if (toTopupCoins(normalized) <= 0) {
+    throw new HttpError(400, "Top-up amount is too low to convert into coins");
+  }
+
+  return normalized;
+};
+
+const toTopupLifecycleMessage = (
+  transactionStatus: WalletTransactionStatus,
+  metadata: Record<string, unknown>
+): string => {
+  if (typeof metadata.latestMessage === "string" && metadata.latestMessage.trim()) {
+    return metadata.latestMessage.trim();
+  }
+
+  if (transactionStatus === WalletTransactionStatus.COMPLETED) {
+    return TOPUP_SUCCESS_MESSAGE;
+  }
+
+  if (transactionStatus === WalletTransactionStatus.PENDING) {
+    return TOPUP_PENDING_MESSAGE;
+  }
+
+  if (transactionStatus === WalletTransactionStatus.CANCELLED) {
+    return TOPUP_CANCELLED_MESSAGE;
+  }
+
+  return TOPUP_FAILED_MESSAGE;
+};
+
+const mapTopupSnapshot = (
+  transaction: {
+    id: number;
+    walletId: number;
+    amount: Prisma.Decimal;
+    type: string;
+    status: WalletTransactionStatus;
+    note: string | null;
+    reference: string | null;
+    metadata: Prisma.JsonValue | null;
+    createdAt: Date;
+  },
+  walletUserId: number
+): TopupPaymentSnapshotView => {
+  const metadata = toJsonObject(transaction.metadata);
+  const amountCoins = Number(transaction.amount);
+  const amountVnd = resolveTopupAmountVnd(metadata, amountCoins);
+  const paymentRef =
+    transaction.reference ||
+    (typeof metadata.paymentRef === "string" && metadata.paymentRef.trim()
+      ? metadata.paymentRef.trim()
+      : `TOPUP-${transaction.id}`);
+  const paymentUrl =
+    typeof metadata.paymentUrl === "string" && metadata.paymentUrl.trim()
+      ? metadata.paymentUrl.trim()
+      : undefined;
+  const qrPayload =
+    typeof metadata.qrPayload === "string" && metadata.qrPayload.trim()
+      ? metadata.qrPayload.trim()
+      : paymentUrl;
+  const expiresAtRaw =
+    typeof metadata.expiresAt === "string" && metadata.expiresAt.trim()
+      ? new Date(metadata.expiresAt)
+      : undefined;
+  const expiresAt =
+    expiresAtRaw && !Number.isNaN(expiresAtRaw.getTime()) ? expiresAtRaw : undefined;
+  const pollIntervalMs =
+    typeof metadata.pollIntervalMs === "number" && Number.isFinite(metadata.pollIntervalMs)
+      ? Math.max(1_000, Math.floor(metadata.pollIntervalMs))
+      : undefined;
+
+  return {
+    transactionId: transaction.id,
+    status: toTopupStatus(transaction.status),
+    message: toTopupLifecycleMessage(transaction.status, metadata),
+    amountVnd,
+    coins: amountCoins,
+    paymentMethod: "vnpay",
+    paymentRef,
+    paymentUrl,
+    qrPayload,
+    expiresAt,
+    pollIntervalMs,
+    transaction: mapTransaction(transaction, walletUserId),
+  };
+};
+
+const toVnpaySignableParams = (query: Record<string, unknown>): Record<string, string> => {
+  const params: Record<string, string> = {};
+
+  Object.entries(query).forEach(([key, value]) => {
+    if (key === "vnp_SecureHash" || key === "vnp_SecureHashType") {
+      return;
+    }
+
+    if (typeof value !== "string") {
+      return;
+    }
+
+    const trimmedValue = value.trim();
+    if (!trimmedValue) {
+      return;
+    }
+
+    params[key] = trimmedValue;
+  });
+
+  return params;
+};
+
+const isVnpayIpnSignatureValid = (query: VnpayIpnQueryInput): boolean => {
+  const params = toVnpaySignableParams(query as unknown as Record<string, unknown>);
+  const expectedSignature = signVnpayParams(params);
+
+  return expectedSignature.toLowerCase() === query.vnp_SecureHash.toLowerCase();
+};
+
+const isVnpayTopupSuccess = (
+  responseCode: string,
+  transactionStatus?: string
+): boolean => {
+  return (
+    responseCode === VNPAY_SUCCESS_CODE &&
+    (!transactionStatus || transactionStatus === VNPAY_SUCCESS_CODE)
+  );
+};
+
+const toVnpayFailureStatus = (responseCode: string): WalletTransactionStatus => {
+  if (responseCode === VNPAY_CANCELLED_CODE) {
+    return WalletTransactionStatus.CANCELLED;
+  }
+
+  return WalletTransactionStatus.FAILED;
+};
+
+const toVnpayFailureMessage = (responseCode: string): string => {
+  if (responseCode === VNPAY_CANCELLED_CODE) {
+    return TOPUP_CANCELLED_MESSAGE;
+  }
+
+  return TOPUP_FAILED_MESSAGE;
+};
+
+const toTopupReference = (userId: number): string => {
+  const random = Math.floor(100_000 + Math.random() * 900_000);
+  return `TOPUP-${userId}-${Date.now()}-${random}`;
+};
 
 const parseContextType = (
   value: unknown
@@ -324,6 +660,245 @@ const ensureTransactionOwnership = async (
   return {
     wallet,
     transaction,
+  };
+};
+
+export const createTopup = async (
+  userId: number,
+  payload: CreateTopupInput,
+  context: { clientIp?: string; userAgent?: string } = {}
+): Promise<TopupPaymentSnapshotView> => {
+  const paymentMethod = payload.paymentMethod.trim().toLowerCase();
+
+  if (paymentMethod !== "vnpay") {
+    throw new HttpError(400, TOPUP_METHOD_NOT_SUPPORTED_MESSAGE);
+  }
+
+  const amountVnd = ensureTopupAmount(payload.amountVnd);
+  const coins = toTopupCoins(amountVnd);
+  const paymentRef = toTopupReference(userId);
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + VNPAY_EXPIRE_MINUTES * 60_000);
+  const clientIp = normalizeClientIp(context.clientIp);
+  const orderInfo = `TeacherHub top-up ${paymentRef}`;
+
+  const vnpayParams: Record<string, string> = {
+    vnp_Version: VNPAY_VERSION,
+    vnp_Command: VNPAY_COMMAND,
+    vnp_TmnCode: env.VNPAY_TMN_CODE,
+    vnp_Amount: String(amountVnd * 100),
+    vnp_CreateDate: toVnpDate(now),
+    vnp_CurrCode: VNPAY_CURRENCY,
+    vnp_IpAddr: clientIp,
+    vnp_Locale: VNPAY_LOCALE,
+    vnp_OrderInfo: orderInfo,
+    vnp_OrderType: VNPAY_ORDER_TYPE,
+    vnp_ReturnUrl: env.VNPAY_RETURN_URL,
+    vnp_TxnRef: paymentRef,
+    vnp_ExpireDate: toVnpDate(expiresAt),
+  };
+
+  const secureHash = signVnpayParams(vnpayParams);
+  const paymentQuery = toVnpaySignData({
+    ...vnpayParams,
+    vnp_SecureHash: secureHash,
+  });
+  const paymentUrl = appendQueryToUrl(env.VNPAY_URL, paymentQuery);
+  const note = payload.note?.trim();
+
+  return prisma.$transaction(async (tx) => {
+    const wallet = await ensureWallet(userId, tx);
+
+    const metadata: Prisma.InputJsonObject = {
+      contextType: "wallet",
+      contextTitle: `Top-up ${amountVnd.toLocaleString("vi-VN")}đ`,
+      target: `VNPAY • ${paymentRef}`,
+      amountVnd,
+      coins,
+      paymentMethod: "vnpay",
+      paymentRef,
+      paymentUrl,
+      qrPayload: paymentUrl,
+      expiresAt: expiresAt.toISOString(),
+      pollIntervalMs: VNPAY_STATUS_POLL_INTERVAL_MS,
+      latestMessage: TOPUP_PENDING_MESSAGE,
+      vnpVersion: VNPAY_VERSION,
+      vnpCommand: VNPAY_COMMAND,
+      vnpTxnRef: paymentRef,
+      vnpOrderInfo: orderInfo,
+      vnpCreateDate: vnpayParams.vnp_CreateDate,
+      vnpExpireDate: vnpayParams.vnp_ExpireDate,
+      ipnUrl: env.VNPAY_IPN_URL,
+      clientIp,
+      ...(context.userAgent ? { userAgent: context.userAgent } : {}),
+      ...(note ? { note } : {}),
+    };
+
+    const transaction = await tx.walletTransaction.create({
+      data: {
+        walletId: wallet.id,
+        actorId: userId,
+        amount: coins,
+        type: "topup",
+        status: WalletTransactionStatus.PENDING,
+        note,
+        reference: paymentRef,
+        metadata,
+      },
+    });
+
+    return mapTopupSnapshot(transaction, wallet.userId);
+  });
+};
+
+export const getTopupStatus = async (
+  userId: number,
+  transactionId: number
+): Promise<TopupPaymentSnapshotView> => {
+  const { wallet, transaction } = await ensureTransactionOwnership(transactionId, userId);
+
+  if (toTransactionType(transaction.type) !== "topup") {
+    throw new HttpError(404, "Top-up transaction not found");
+  }
+
+  return mapTopupSnapshot(transaction, wallet.userId);
+};
+
+export const handleVnpayIpn = async (
+  query: VnpayIpnQueryInput
+): Promise<VnpayIpnResponse> => {
+  if (!isVnpayIpnSignatureValid(query)) {
+    return {
+      RspCode: VNPAY_IPN_RESPONSE_INVALID_CHECKSUM_CODE,
+      Message: "Invalid checksum",
+    };
+  }
+
+  const paymentRef = query.vnp_TxnRef.trim();
+  const topupTransaction = await prisma.walletTransaction.findFirst({
+    where: {
+      reference: paymentRef,
+      type: "topup",
+    },
+  });
+
+  if (!topupTransaction) {
+    return {
+      RspCode: VNPAY_IPN_RESPONSE_ORDER_NOT_FOUND_CODE,
+      Message: "Order not found",
+    };
+  }
+
+  const topupMetadata = toJsonObject(topupTransaction.metadata);
+  const expectedVnpAmount =
+    resolveTopupAmountVnd(topupMetadata, Number(topupTransaction.amount)) * 100;
+  const callbackAmount = Number.parseInt(query.vnp_Amount, 10);
+
+  if (!Number.isFinite(callbackAmount) || callbackAmount !== expectedVnpAmount) {
+    return {
+      RspCode: VNPAY_IPN_RESPONSE_INVALID_AMOUNT_CODE,
+      Message: "Invalid amount",
+    };
+  }
+
+  const callbackMetadataPatch: Record<string, unknown> = {
+    vnpAmount: callbackAmount,
+    vnpResponseCode: query.vnp_ResponseCode,
+    vnpTransactionStatus: query.vnp_TransactionStatus,
+    vnpTransactionNo: query.vnp_TransactionNo,
+    vnpPayDate: query.vnp_PayDate,
+    vnpBankCode: query.vnp_BankCode,
+    vnpBankTranNo: query.vnp_BankTranNo,
+    vnpOrderInfo: query.vnp_OrderInfo,
+    lastIpnAt: new Date().toISOString(),
+  };
+
+  const isSuccess = isVnpayTopupSuccess(
+    query.vnp_ResponseCode,
+    query.vnp_TransactionStatus
+  );
+
+  const transitionCode = await prisma.$transaction(async (tx) => {
+    const latest = await tx.walletTransaction.findUnique({
+      where: {
+        id: topupTransaction.id,
+      },
+    });
+
+    if (!latest) {
+      return VNPAY_IPN_RESPONSE_ORDER_NOT_FOUND_CODE;
+    }
+
+    if (latest.status !== WalletTransactionStatus.PENDING) {
+      const latestMetadata = toJsonObject(latest.metadata);
+      await tx.walletTransaction.update({
+        where: {
+          id: latest.id,
+        },
+        data: {
+          metadata: mergeRecord(latestMetadata, {
+            ...callbackMetadataPatch,
+            latestMessage: toTopupLifecycleMessage(latest.status, latestMetadata),
+          }),
+        },
+      });
+
+      return VNPAY_IPN_RESPONSE_ALREADY_CONFIRMED_CODE;
+    }
+
+    const nextStatus = isSuccess
+      ? WalletTransactionStatus.COMPLETED
+      : toVnpayFailureStatus(query.vnp_ResponseCode);
+    const nextMessage = isSuccess
+      ? TOPUP_SUCCESS_MESSAGE
+      : toVnpayFailureMessage(query.vnp_ResponseCode);
+
+    await tx.walletTransaction.update({
+      where: {
+        id: latest.id,
+      },
+      data: {
+        status: nextStatus,
+        metadata: mergeRecord(latest.metadata, {
+          ...callbackMetadataPatch,
+          latestMessage: nextMessage,
+        }),
+      },
+    });
+
+    if (isSuccess) {
+      await tx.wallet.update({
+        where: {
+          id: latest.walletId,
+        },
+        data: {
+          balance: {
+            increment: Number(latest.amount),
+          },
+        },
+      });
+    }
+
+    return VNPAY_IPN_RESPONSE_SUCCESS_CODE;
+  });
+
+  if (transitionCode === VNPAY_IPN_RESPONSE_ORDER_NOT_FOUND_CODE) {
+    return {
+      RspCode: VNPAY_IPN_RESPONSE_ORDER_NOT_FOUND_CODE,
+      Message: "Order not found",
+    };
+  }
+
+  if (transitionCode === VNPAY_IPN_RESPONSE_ALREADY_CONFIRMED_CODE) {
+    return {
+      RspCode: VNPAY_IPN_RESPONSE_ALREADY_CONFIRMED_CODE,
+      Message: "Order already confirmed",
+    };
+  }
+
+  return {
+    RspCode: VNPAY_IPN_RESPONSE_SUCCESS_CODE,
+    Message: "Confirm Success",
   };
 };
 

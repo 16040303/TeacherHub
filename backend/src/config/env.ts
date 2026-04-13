@@ -140,6 +140,31 @@ const parseBodySize = (value: string | undefined, fallback: string): string => {
   return normalized || fallback;
 };
 
+const parseHttpUrl = (value: string, name: string): string => {
+  let parsed: URL;
+
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error(`${name} must be a valid URL.`);
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(`${name} must use http:// or https:// protocol.`);
+  }
+
+  return value;
+};
+
+const parseOptionalHttpUrl = (value: string | undefined, name: string): string => {
+  const normalized = toTrimmedString(value);
+  if (!normalized) {
+    return "";
+  }
+
+  return parseHttpUrl(normalized, name);
+};
+
 const nodeEnv = parseNodeEnv(process.env.NODE_ENV);
 
 const defaultCorsOrigins = [
@@ -160,19 +185,46 @@ if (nodeEnv === "production" && configuredOrigins.length === 0) {
 const corsAllowedOrigins =
   configuredOrigins.length > 0 ? configuredOrigins : defaultCorsOrigins;
 
+const port = parseInteger(process.env.PORT, "PORT", 3000, {
+  min: 1,
+  max: 65535,
+});
+
+const frontendUrl = parseHttpUrl(
+  requireValue(process.env.FRONTEND_URL, "FRONTEND_URL"),
+  "FRONTEND_URL"
+);
+
+const configuredVnpayTmnCode = toTrimmedString(process.env.VNPAY_TMN_CODE);
+const configuredVnpayHashSecret = toTrimmedString(process.env.VNPAY_HASH_SECRET);
+const configuredVnpayUrl = parseOptionalHttpUrl(process.env.VNPAY_URL, "VNPAY_URL");
+const configuredVnpayReturnUrl = parseOptionalHttpUrl(
+  process.env.VNPAY_RETURN_URL,
+  "VNPAY_RETURN_URL"
+);
+const configuredVnpayIpnUrl = parseOptionalHttpUrl(
+  process.env.VNPAY_IPN_URL,
+  "VNPAY_IPN_URL"
+);
+
+const fallbackVnpayUrl = "https://sandbox.vnpayment.vn/paymentv2/vpcpay.html";
+const fallbackVnpayReturnUrl = `${frontendUrl.replace(/\/$/, "")}/wallet`;
+const fallbackVnpayIpnUrl = `http://localhost:${port}/api/wallet/topup/vnpay/ipn`;
+
 export const env = {
   NODE_ENV: nodeEnv,
   IS_PRODUCTION: nodeEnv === "production",
-  PORT: parseInteger(process.env.PORT, "PORT", 3000, {
-    min: 1,
-    max: 65535,
-  }),
+  PORT: port,
   DATABASE_URL: validateDatabaseUrl(
     requireValue(process.env.DATABASE_URL, "DATABASE_URL")
   ),
   JWT_SECRET: validateJwtSecret(
     requireValue(process.env.JWT_SECRET, "JWT_SECRET")
   ),
+  ACCESS_TOKEN_EXPIRES_IN:
+    toTrimmedString(process.env.ACCESS_TOKEN_EXPIRES_IN) || "15m",
+  REFRESH_TOKEN_EXPIRES_IN:
+    toTrimmedString(process.env.REFRESH_TOKEN_EXPIRES_IN) || "7d",
   CORS_ALLOWED_ORIGINS: corsAllowedOrigins,
   TRUST_PROXY: parseBoolean(process.env.TRUST_PROXY, "TRUST_PROXY", false),
   MAX_JSON_BODY_SIZE: parseBodySize(process.env.MAX_JSON_BODY_SIZE, "1mb"),
@@ -197,4 +249,39 @@ export const env = {
     "UPLOADS_PUBLIC_ENABLED",
     nodeEnv !== "production"
   ),
+  FRONTEND_URL: frontendUrl,
+  GOOGLE_CLIENT_ID: requireValue(process.env.GOOGLE_CLIENT_ID, "GOOGLE_CLIENT_ID"),
+  SMTP_HOST: toTrimmedString(process.env.SMTP_HOST),
+  SMTP_PORT: parseInteger(process.env.SMTP_PORT, "SMTP_PORT", 587, {
+    min: 1,
+    max: 65535,
+  }),
+  SMTP_USER: toTrimmedString(process.env.SMTP_USER),
+  SMTP_PASS: toTrimmedString(process.env.SMTP_PASS),
+  SMTP_FROM: toTrimmedString(process.env.SMTP_FROM) || "noreply@teacherhub.local",
+  VNPAY_TMN_CODE: configuredVnpayTmnCode || "DEMOTMN",
+  VNPAY_HASH_SECRET: configuredVnpayHashSecret || "DEMO_HASH_SECRET",
+  VNPAY_URL: configuredVnpayUrl || fallbackVnpayUrl,
+  VNPAY_RETURN_URL: configuredVnpayReturnUrl || fallbackVnpayReturnUrl,
+  VNPAY_IPN_URL: configuredVnpayIpnUrl || fallbackVnpayIpnUrl,
 } as const;
+
+if (env.IS_PRODUCTION) {
+  if (!env.SMTP_HOST || !env.SMTP_USER || !env.SMTP_PASS) {
+    throw new Error(
+      "SMTP_HOST, SMTP_USER, and SMTP_PASS are required in production."
+    );
+  }
+
+  if (
+    !configuredVnpayTmnCode ||
+    !configuredVnpayHashSecret ||
+    !configuredVnpayUrl ||
+    !configuredVnpayReturnUrl ||
+    !configuredVnpayIpnUrl
+  ) {
+    throw new Error(
+      "VNPAY_TMN_CODE, VNPAY_HASH_SECRET, VNPAY_URL, VNPAY_RETURN_URL, and VNPAY_IPN_URL are required in production."
+    );
+  }
+}

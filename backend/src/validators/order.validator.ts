@@ -11,8 +11,8 @@ const paymentStatusInputSchema = z
 const paymentMethodInputSchema = z
   .string()
   .trim()
-  .min(1, "payment method is required")
-  .max(64, "payment method is too long")
+  .toLowerCase()
+  .pipe(z.enum(["vnpay", "momo", "wallet", "bank"]))
   .transform((value) => value.toUpperCase());
 
 const paymentReferenceInputSchema = z

@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { AuthRequest } from "../middlewares/auth.middleware";
 import * as orderService from "../services/order.service";
 import { handleControllerError } from "../utils/controller-error";
+import { sendSuccess } from "../utils/response";
 import {
   createOrderSchema,
   entitlementLessonParamSchema,
@@ -18,7 +19,8 @@ export const createOrder = async (req: Request, res: Response): Promise<void> =>
     const payload = createOrderSchema.parse(req.body);
     const order = await orderService.createOrder(getUserId(req), payload);
 
-    res.status(201).json({
+    sendSuccess(res, {
+      statusCode: 201,
       message: "Order created successfully",
       data: order,
     });
@@ -31,7 +33,7 @@ export const listMyOrders = async (req: Request, res: Response): Promise<void> =
   try {
     const orders = await orderService.listMyOrders(getUserId(req));
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Orders retrieved successfully",
       data: orders,
     });
@@ -48,7 +50,7 @@ export const getMyOrderDetail = async (
     const { id } = orderIdParamSchema.parse(req.params);
     const order = await orderService.getMyOrderDetail(getUserId(req), id);
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Order retrieved successfully",
       data: order,
     });
@@ -62,7 +64,7 @@ export const cancelMyOrder = async (req: Request, res: Response): Promise<void> 
     const { id } = orderIdParamSchema.parse(req.params);
     const order = await orderService.cancelMyOrder(getUserId(req), id);
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Order cancelled successfully",
       data: order,
     });
@@ -80,7 +82,7 @@ export const processOrderPayment = async (
     const payload = processOrderPaymentSchema.parse(req.body);
     const order = await orderService.upsertOrderPayment(getUserId(req), id, payload);
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Order payment updated successfully",
       data: order,
     });
@@ -97,7 +99,7 @@ export const getPaymentResult = async (
     const { id } = orderIdParamSchema.parse(req.params);
     const snapshot = await orderService.getPaymentResult(getUserId(req), id);
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Payment result retrieved successfully",
       data: snapshot,
     });
@@ -117,7 +119,7 @@ export const getLessonEntitlement = async (
       lessonId
     );
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Lesson entitlement retrieved successfully",
       data: entitlement,
     });

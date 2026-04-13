@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { AuthRequest } from "../middlewares/auth.middleware";
 import * as followService from "../services/follow.service";
 import { handleControllerError } from "../utils/controller-error";
+import { sendSuccess } from "../utils/response";
 import { followUserIdParamSchema } from "../validators/follow.validator";
 
 export const listFollowingIds = async (
@@ -12,7 +13,7 @@ export const listFollowingIds = async (
     const { userId } = followUserIdParamSchema.parse(req.params);
     const followingIds = await followService.listFollowingIds(userId);
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Following list retrieved successfully",
       data: followingIds,
     });
@@ -29,7 +30,7 @@ export const listFollowerIds = async (
     const { userId } = followUserIdParamSchema.parse(req.params);
     const followerIds = await followService.listFollowerIds(userId);
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Follower list retrieved successfully",
       data: followerIds,
     });
@@ -46,7 +47,7 @@ export const getFollowCounts = async (
     const { userId } = followUserIdParamSchema.parse(req.params);
     const counts = await followService.getFollowCounts(userId);
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Follow counts retrieved successfully",
       data: counts,
     });
@@ -68,7 +69,7 @@ export const getFollowStatus = async (
       userId
     );
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Follow relation status retrieved successfully",
       data: {
         isFollowing,
@@ -86,7 +87,7 @@ export const followUser = async (req: Request, res: Response): Promise<void> => 
 
     await followService.followUser(authReq.user.userId, userId);
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "User followed successfully",
     });
   } catch (error) {
@@ -104,7 +105,7 @@ export const unfollowUser = async (
 
     await followService.unfollowUser(authReq.user.userId, userId);
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "User unfollowed successfully",
     });
   } catch (error) {

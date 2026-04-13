@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { AuthRequest } from "../middlewares/auth.middleware";
 import * as reviewService from "../services/review.service";
 import { handleControllerError } from "../utils/controller-error";
+import { sendSuccess } from "../utils/response";
 import { reviewIdParamSchema, updateReviewSchema } from "../validators/review.validator";
 
 export const updateReview = async (req: Request, res: Response): Promise<void> => {
@@ -12,7 +13,7 @@ export const updateReview = async (req: Request, res: Response): Promise<void> =
 
     const review = await reviewService.updateReview(id, authReq.user.userId, payload);
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Review updated successfully",
       data: review,
     });
@@ -28,7 +29,7 @@ export const deleteReview = async (req: Request, res: Response): Promise<void> =
 
     await reviewService.deleteReview(id, authReq.user.userId);
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Review deleted successfully",
     });
   } catch (error) {

@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { AuthRequest } from "../middlewares/auth.middleware";
 import * as notificationService from "../services/notification.service";
 import { handleControllerError } from "../utils/controller-error";
+import { sendSuccess } from "../utils/response";
 import { notificationIdParamSchema } from "../validators/notification.validator";
 
 const getUserId = (req: Request): number => {
@@ -15,7 +16,7 @@ export const listMyNotifications = async (
   try {
     const notifications = await notificationService.listNotifications(getUserId(req));
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Notifications retrieved successfully",
       data: notifications,
     });
@@ -35,7 +36,7 @@ export const markMyNotificationAsRead = async (
       id
     );
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Notification marked as read",
       data: notification,
     });
@@ -53,7 +54,7 @@ export const markAllMyNotificationsAsRead = async (
       getUserId(req)
     );
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Notifications marked as read",
       data: updatedCount,
     });

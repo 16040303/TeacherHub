@@ -2,18 +2,21 @@ import { Response } from "express";
 import { ZodError } from "zod";
 import { env } from "../config/env";
 import { HttpError } from "./http-error";
+import { sendError } from "./response";
 
 export const handleControllerError = (res: Response, error: unknown): void => {
   if (error instanceof ZodError) {
-    res.status(400).json({
+    sendError(res, {
+      statusCode: 400,
       message: "Validation failed",
-      errors: error.flatten(),
+      errors: error.flatten().fieldErrors,
     });
     return;
   }
 
   if (error instanceof HttpError) {
-    res.status(error.statusCode).json({
+    sendError(res, {
+      statusCode: error.statusCode,
       message: error.message,
     });
     return;
@@ -23,7 +26,8 @@ export const handleControllerError = (res: Response, error: unknown): void => {
     console.error("Unhandled controller error:", error);
   }
 
-  res.status(500).json({
+  sendError(res, {
+    statusCode: 500,
     message: "Internal server error",
   });
 };

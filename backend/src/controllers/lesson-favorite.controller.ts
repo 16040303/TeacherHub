@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { AuthRequest } from "../middlewares/auth.middleware";
 import * as lessonFavoriteService from "../services/lesson-favorite.service";
 import { handleControllerError } from "../utils/controller-error";
+import { sendSuccess } from "../utils/response";
 import { lessonFavoriteLessonIdParamSchema } from "../validators/lesson-favorite.validator";
 
 const getUserId = (req: Request): number => {
@@ -15,7 +16,7 @@ export const listMyFavoriteLessonIds = async (
   try {
     const lessonIds = await lessonFavoriteService.listFavoriteLessonIds(getUserId(req));
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Favorite lessons retrieved successfully",
       data: lessonIds,
     });
@@ -32,7 +33,7 @@ export const addMyLessonFavorite = async (
     const { id } = lessonFavoriteLessonIdParamSchema.parse(req.params);
     const result = await lessonFavoriteService.addLessonFavorite(getUserId(req), id);
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Lesson added to favorites",
       data: result,
     });
@@ -49,7 +50,7 @@ export const removeMyLessonFavorite = async (
     const { id } = lessonFavoriteLessonIdParamSchema.parse(req.params);
     const result = await lessonFavoriteService.removeLessonFavorite(getUserId(req), id);
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Lesson removed from favorites",
       data: result,
     });

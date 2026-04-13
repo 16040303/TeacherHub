@@ -1,0 +1,24 @@
+﻿{
+    "baseUrl":  "http://localhost:3000",
+    "outputPath":  "./tests/phase2_smoke_output.json",
+    "teacherEmail":  "teacher.smoke@test.com",
+    "studentEmail":  "student.smoke@test.com",
+    "lessonIds":  {
+                      "paidA":  10,
+                      "paidB":  11,
+                      "freeC":  12
+                  },
+    "orderIds":  {
+                     "orderA":  10,
+                     "orderB":  11,
+                     "orderC":  12
+                 },
+    "checks":  {
+                   "createListDetail":  "ok",
+                   "paymentLifecycle":  "ok",
+                   "cancellation":  "ok",
+                   "entitlement":  "ok",
+                   "contractAliases":  "ok",
+                   "errorContract":  "ok"
+               }
+}

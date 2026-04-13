@@ -1,3 +1,4 @@
+import { UserRole } from "@prisma/client";
 import { Router } from "express";
 import {
   getAdminDashboardSnapshot,
@@ -15,12 +16,12 @@ import {
   updateAdminReport,
   updateAdminUser,
 } from "../controllers/admin.controller";
-import { authenticate, requireAdmin } from "../middlewares/auth.middleware";
+import { authenticate, authorize } from "../middlewares/auth.middleware";
 
 const adminRouter = Router();
 
 adminRouter.use(authenticate);
-adminRouter.use(requireAdmin);
+adminRouter.use(authorize(UserRole.ADMIN));
 
 adminRouter.get("/dashboard", getAdminDashboardSnapshot);
 adminRouter.get("/dashboard/stats", getAdminDashboardStats);

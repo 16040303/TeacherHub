@@ -96,6 +96,21 @@ interface WithdrawalPayloadDto {
   note?: string;
 }
 
+interface TopupPaymentSnapshotDto {
+  transactionId?: number | string;
+  status?: TopUpPaymentSnapshot['status'] | string;
+  message?: string;
+  amountVnd?: number;
+  coins?: number;
+  paymentMethod?: TopUpPaymentMethod | string;
+  paymentRef?: string;
+  paymentUrl?: string;
+  qrPayload?: string;
+  expiresAt?: string;
+  pollIntervalMs?: number;
+  transaction?: WalletTransactionDto;
+}
+
 const VND_PER_CONVERSION_UNIT = 1_000;
 const COINS_PER_CONVERSION_UNIT = 10;
 const TOP_UP_MIN_VND = 10_000;
@@ -156,6 +171,20 @@ const normalizeDate = (value: string | undefined): string => {
   }
 
   return toSafeDate(candidate);
+};
+
+const normalizeOptionalDate = (value: unknown): string | undefined => {
+  const candidate = toTrimmedString(value);
+  if (!candidate) {
+    return undefined;
+  }
+
+  const parsed = new Date(candidate);
+  if (Number.isNaN(parsed.getTime())) {
+    return undefined;
+  }
+
+  return parsed.toISOString();
 };
 
 const normalizeType = (value: WalletTransactionType | string | undefined): WalletTransactionType => {
@@ -515,30 +544,6 @@ const validateTopUpAmountVnd = (amountVnd: number): void => {
   }
 };
 
-const pickTopUpStatus = (paymentMethod: TopUpPaymentMethod): TopUpPaymentSnapshot['status'] => {
-  const random = Math.random();
-
-  if (paymentMethod === 'bank') {
-    if (random < 0.75) {
-      return 'pending';
-    }
-    return random < 0.9 ? 'success' : 'failed';
-  }
-
-  if (paymentMethod === 'momo') {
-    if (random < 0.55) {
-      return 'success';
-    }
-    return random < 0.8 ? 'pending' : 'failed';
-  }
-
-  if (random < 0.6) {
-    return 'success';
-  }
-
-  return random < 0.82 ? 'pending' : 'failed';
-};
-
 const topUpStatusMeta: Record<
   TopUpPaymentSnapshot['status'],
   { transactionStatus: WalletTransactionStatus; message: string }
@@ -555,6 +560,62 @@ const topUpStatusMeta: Record<
     transactionStatus: 'pending',
     message: 'Payment is pending confirmation. Your wallet will update once settlement completes.',
   },
+};
+
+const normalizeTopUpSnapshotStatus = (
+  value: TopUpPaymentSnapshot['status'] | string | undefined,
+): TopUpPaymentSnapshot['status'] => toSafeEnum(value, ['success', 'failed', 'pending'], 'pending');
+
+const normalizePollIntervalMs = (value: unknown): number | undefined => {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return undefined;
+  }
+
+  return Math.max(1_000, Math.floor(value));
+};
+
+const mapTopUpSnapshot = (dto: TopupPaymentSnapshotDto): TopUpPaymentSnapshot => {
+  const status = normalizeTopUpSnapshotStatus(dto.status);
+  const paymentMethod = normalizeTopUpMethod(dto.paymentMethod);
+  const amountVnd = Math.max(0, Math.floor(toSafeNumber(dto.amountVnd, 0)));
+  const coins = Math.max(0, Math.floor(toSafeNumber(dto.coins, toTopUpCoins(amountVnd))));
+  const transactionId = toId(dto.transactionId ?? dto.transaction?.id, '');
+  const paymentRef = toTrimmedString(dto.paymentRef) || `TOPUP-${transactionId || Date.now()}`;
+  const paymentMethodLabel = TOP_UP_METHOD_LABELS[paymentMethod];
+  const fallbackTransactionStatus = topUpStatusMeta[status].transactionStatus;
+
+  const transaction = dto.transaction
+    ? normalizeTransaction(mapWalletTransaction(dto.transaction), 0)
+    : normalizeTransaction(
+        {
+          id: transactionId || `tx-topup-${Date.now()}`,
+          userId: 'unknown-user',
+          date: new Date().toISOString(),
+          description: `Top-up via ${paymentMethodLabel}`,
+          type: 'topup',
+          amount: coins,
+          status: fallbackTransactionStatus,
+          contextTitle: amountVnd > 0 ? `Top-up ${amountVnd.toLocaleString('vi-VN')}đ` : undefined,
+          contextType: 'wallet',
+          target: `${paymentMethodLabel} • ${paymentRef}`,
+        },
+        0,
+      );
+
+  return {
+    transactionId: transactionId || transaction.id,
+    status,
+    message: toTrimmedString(dto.message) || topUpStatusMeta[status].message,
+    amountVnd,
+    coins,
+    paymentMethod,
+    paymentRef,
+    paymentUrl: toOptionalString(dto.paymentUrl),
+    qrPayload: toOptionalString(dto.qrPayload) ?? toOptionalString(dto.paymentUrl),
+    expiresAt: normalizeOptionalDate(dto.expiresAt),
+    pollIntervalMs: normalizePollIntervalMs(dto.pollIntervalMs),
+    transaction,
+  };
 };
 
 export const getWallet = async (userId: string): Promise<Wallet> => {
@@ -654,7 +715,7 @@ export const getTopUpLimits = (): { minVnd: number; maxVnd: number } => ({
 });
 
 export const topUpWallet = async (
-  userId: string,
+  _userId: string,
   input: TopUpRequestInput,
 ): Promise<TopUpPaymentSnapshot> => {
   const amountVnd = Math.floor(Number(input.amountVnd));
@@ -663,35 +724,40 @@ export const topUpWallet = async (
 
   validateTopUpAmountVnd(amountVnd);
 
-  const conversion = getTopUpConversionPreview(amountVnd);
-  const outcomeStatus = pickTopUpStatus(paymentMethod);
-  const statusMeta = topUpStatusMeta[outcomeStatus];
-  const paymentRef = `TOPUP-${Math.floor(100000 + Math.random() * 900000)}`;
+  try {
+    const snapshot = await apiRequest<TopupPaymentSnapshotDto>('/api/wallet/topups', {
+      method: 'POST',
+      body: {
+        amountVnd,
+        paymentMethod,
+        note,
+      },
+    });
 
-  const transaction = await createWalletTransaction(
-    userId,
-    {
-      description: `Top-up via ${TOP_UP_METHOD_LABELS[paymentMethod]}`,
-      type: 'topup',
-      amount: conversion.coins,
-      status: statusMeta.transactionStatus,
-      contextTitle: `Top-up ${amountVnd.toLocaleString('vi-VN')}đ`,
-      contextType: 'wallet',
-      target: `${TOP_UP_METHOD_LABELS[paymentMethod]} • ${paymentRef}`,
-      note,
-    },
-    outcomeStatus === 'success',
-  );
+    return mapTopUpSnapshot(snapshot);
+  } catch (error) {
+    throw parseApiError(error);
+  }
+};
 
-  return {
-    status: outcomeStatus,
-    message: statusMeta.message,
-    amountVnd,
-    coins: conversion.coins,
-    paymentMethod,
-    paymentRef,
-    transaction,
-  };
+export const getTopupStatus = async (
+  _userId: string,
+  transactionId: string,
+): Promise<TopUpPaymentSnapshot> => {
+  const normalizedTransactionId = toTrimmedString(transactionId);
+  if (!normalizedTransactionId) {
+    throw new Error('Transaction ID is required');
+  }
+
+  try {
+    const snapshot = await apiRequest<TopupPaymentSnapshotDto>(
+      `/api/wallet/topups/${encodeURIComponent(normalizedTransactionId)}`,
+    );
+
+    return mapTopUpSnapshot(snapshot);
+  } catch (error) {
+    throw parseApiError(error);
+  }
 };
 
 export const verifyPayoutAccount = async (

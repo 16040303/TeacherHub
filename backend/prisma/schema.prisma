@@ -57,6 +57,41 @@ enum PaymentStatus {
   @@map("payment_status")
 }
 
+enum RefreshTokenRevocationReason {
+  ROTATED
+  LOGOUT
+  PASSWORD_RESET
+  EXPIRED
+  REUSE_DETECTED
+
+  @@map("refresh_token_revocation_reason")
+}
+
+enum AuthAuditEvent {
+  REGISTER
+  LOGIN_SUCCESS
+  LOGIN_FAILED
+  REFRESH_SUCCESS
+  REFRESH_FAILED
+  REFRESH_REUSE_DETECTED
+  LOGOUT_SUCCESS
+  LOGOUT_IGNORED
+  FORGOT_PASSWORD_REQUESTED
+  RESET_PASSWORD_SUCCESS
+  RESET_PASSWORD_FAILED
+  VERIFY_EMAIL_SUCCESS
+  VERIFY_EMAIL_FAILED
+  RESEND_VERIFICATION_REQUESTED
+
+  @@map("auth_audit_event")
+}
+
+enum AuthProvider {
+  GOOGLE
+
+  @@map("auth_provider")
+}
+
 enum NotificationType {
   SYSTEM
   ORDER
@@ -112,56 +147,114 @@ enum PayoutVerificationStatus {
 }
 
 model User {
-  id                 Int                  @id @default(autoincrement())
-  fullName           String
-  email              String               @unique
-  password           String
-  role               UserRole             @default(TEACHER)
-  status             UserStatus           @default(ACTIVE)
-  avatarUrl          String?
-  bio                String?              @db.Text
-  lessons            Lesson[]             @relation("LessonAuthor")
-  refreshTokens      RefreshToken[]
-  teacherProfile     TeacherProfile?
-  orders             Order[]              @relation("OrderBuyer")
-  payments           Payment[]
-  reviewsWritten     Review[]             @relation("ReviewAuthor")
-  reviewsReceived    Review[]             @relation("ReviewTargetTeacher")
-  followers          Follow[]             @relation("FollowTarget")
-  following          Follow[]             @relation("FollowSource")
-  notifications      Notification[]       @relation("NotificationRecipient")
-  notificationsSent  Notification[]       @relation("NotificationActor")
-  posts              Post[]
-  comments           Comment[]
-  postReactions      PostReaction[]
-  wallet             Wallet?
-  walletTransactions WalletTransaction[]  @relation("WalletTransactionActor")
-  payoutAccounts     PayoutAccount[]
-  lessonFavorites    LessonFavorite[]
-  reportsSubmitted   Report[]             @relation("ReportReporter")
-  reportsReviewed    Report[]             @relation("ReportModerator")
-  reportsTargeted    Report[]             @relation("ReportTargetUser")
-  createdAt          DateTime             @default(now())
-  updatedAt          DateTime             @updatedAt
+  id                     Int                  @id @default(autoincrement())
+  fullName               String
+  email                  String               @unique
+  password               String
+  role                   UserRole             @default(TEACHER)
+  status                 UserStatus           @default(ACTIVE)
+  avatarUrl              String?
+  bio                    String?              @db.Text
+  lessons                Lesson[]             @relation("LessonAuthor")
+  refreshTokens          RefreshToken[]
+  authAuditLogs          AuthAuditLog[]
+  authIdentities         AuthIdentity[]
+  teacherProfile         TeacherProfile?
+  orders                 Order[]              @relation("OrderBuyer")
+  payments               Payment[]
+  reviewsWritten         Review[]             @relation("ReviewAuthor")
+  reviewsReceived        Review[]             @relation("ReviewTargetTeacher")
+  followers              Follow[]             @relation("FollowTarget")
+  following              Follow[]             @relation("FollowSource")
+  notifications          Notification[]       @relation("NotificationRecipient")
+  notificationsSent      Notification[]       @relation("NotificationActor")
+  posts                  Post[]
+  comments               Comment[]
+  postReactions          PostReaction[]
+  wallet                 Wallet?
+  walletTransactions     WalletTransaction[]  @relation("WalletTransactionActor")
+  payoutAccounts         PayoutAccount[]
+  lessonFavorites        LessonFavorite[]
+  reportsSubmitted       Report[]             @relation("ReportReporter")
+  reportsReviewed        Report[]             @relation("ReportModerator")
+  reportsTargeted        Report[]             @relation("ReportTargetUser")
+  isEmailVerified        Boolean              @default(false)
+  emailVerifiedAt        DateTime?
+  emailVerificationToken String?              @db.VarChar(255)
+  emailVerificationExp   DateTime?
+  passwordResetToken     String?              @db.VarChar(255)
+  passwordResetExp       DateTime?
+  createdAt              DateTime             @default(now())
+  updatedAt              DateTime             @updatedAt
 
   @@index([role])
   @@index([status])
   @@index([createdAt])
+  @@index([passwordResetToken])
+  @@index([passwordResetExp])
+}
+
+model AuthIdentity {
+  id                Int          @id @default(autoincrement())
+  userId            Int
+  provider          AuthProvider
+  providerAccountId String       @db.VarChar(191)
+  providerEmail     String?      @db.VarChar(191)
+  user              User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+  @@index([providerEmail])
 }
 
 model RefreshToken {
-  id        Int      @id @default(autoincrement())
-  userId    Int
-  token     String   @unique @db.VarChar(512)
-  expiresAt DateTime
-  revokedAt DateTime?
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id                Int                           @id @default(autoincrement())
+  userId            Int
+  token             String                        @unique @db.VarChar(512)
+  expiresAt         DateTime
+  revokedAt         DateTime?
+  revocationReason  RefreshTokenRevocationReason?
+  replacedByTokenId Int?                          @unique
+  deviceId          String?                       @db.VarChar(191)
+  userAgent         String?                       @db.VarChar(512)
+  ipAddress         String?                       @db.VarChar(64)
+  lastUsedAt        DateTime?
+  user              User                          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  replacedByToken   RefreshToken?                 @relation("RefreshTokenRotation", fields: [replacedByTokenId], references: [id], onDelete: SetNull)
+  rotatedTokens     RefreshToken[]                @relation("RefreshTokenRotation")
+  auditLogs         AuthAuditLog[]
+  createdAt         DateTime                      @default(now())
+  updatedAt         DateTime                      @updatedAt
 
   @@index([userId])
   @@index([expiresAt])
+  @@index([userId, revokedAt])
+  @@index([userId, createdAt])
+  @@index([deviceId])
 }
+
+model AuthAuditLog {
+  id             Int           @id @default(autoincrement())
+  userId         Int?
+  refreshTokenId Int?
+  event          AuthAuditEvent
+  success        Boolean       @default(true)
+  ipAddress      String?       @db.VarChar(64)
+  userAgent      String?       @db.VarChar(512)
+  deviceId       String?       @db.VarChar(191)
+  message        String?       @db.VarChar(255)
+  metadata       Json?
+  user           User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  refreshToken   RefreshToken? @relation(fields: [refreshTokenId], references: [id], onDelete: SetNull)
+  createdAt      DateTime      @default(now())
+
+  @@index([userId, createdAt])
+  @@index([event, createdAt])
+  @@index([refreshTokenId])
+}
+
 
 model TeacherProfile {
   id               Int              @id @default(autoincrement())

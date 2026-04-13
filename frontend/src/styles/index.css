@@ -74,3 +74,40 @@
 .slide-in-from-bottom-4 {
   animation-name: slide-in-from-bottom;
 }
+
+/* Dark mode input readability + autofill safety */
+html.dark input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']),
+html.dark textarea,
+html.dark select {
+  color: rgb(241 245 249);
+  caret-color: rgb(241 245 249);
+}
+
+html.dark input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file'])::placeholder,
+html.dark textarea::placeholder {
+  color: rgb(148 163 184);
+}
+
+html.dark input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']):focus,
+html.dark textarea:focus,
+html.dark select:focus {
+  background-color: rgb(30 41 59);
+  color: rgb(241 245 249);
+}
+
+html.dark input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']):-webkit-autofill,
+html.dark input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']):-webkit-autofill:hover,
+html.dark input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']):-webkit-autofill:focus,
+html.dark textarea:-webkit-autofill,
+html.dark textarea:-webkit-autofill:hover,
+html.dark textarea:-webkit-autofill:focus,
+html.dark select:-webkit-autofill,
+html.dark select:-webkit-autofill:hover,
+html.dark select:-webkit-autofill:focus {
+  -webkit-text-fill-color: rgb(241 245 249);
+  caret-color: rgb(241 245 249);
+  border-color: rgb(51 65 85);
+  -webkit-box-shadow: 0 0 0 1000px rgb(30 41 59) inset;
+  box-shadow: 0 0 0 1000px rgb(30 41 59) inset;
+  transition: background-color 9999s ease-in-out 0s;
+}

@@ -325,10 +325,14 @@ const ensureOrderAccessibleForBuyer = async (
   orderId: number,
   tx?: orderRepository.DbClient
 ): Promise<orderRepository.OrderWithRelations> => {
-  const order = await orderRepository.findOrderByIdForBuyer(orderId, userId, tx);
+  const order = await orderRepository.findOrderById(orderId, tx);
 
   if (!order) {
     throw new HttpError(404, "Order not found");
+  }
+
+  if (order.buyerId !== userId) {
+    throw new HttpError(403, "You are not allowed to access this order");
   }
 
   return order;

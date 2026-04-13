@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { AuthRequest } from "../middlewares/auth.middleware";
 import * as profileService from "../services/profile.service";
 import { handleControllerError } from "../utils/controller-error";
+import { sendSuccess } from "../utils/response";
 import {
   teacherIdParamSchema,
   teacherLessonsQuerySchema,
@@ -20,7 +21,7 @@ export const updateMyProfile = async (req: Request, res: Response): Promise<void
 
     const profile = await profileService.updateMyProfile(authReq.user.userId, payload);
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Profile updated successfully",
       data: profile,
     });
@@ -37,7 +38,7 @@ export const getTeacherPublicProfile = async (
     const { id } = teacherIdParamSchema.parse(req.params);
     const teacher = await profileService.getTeacherPublicProfile(id);
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Teacher profile retrieved successfully",
       data: teacher,
     });
@@ -60,7 +61,7 @@ export const listTeacherLessons = async (
       query
     );
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Teacher lessons retrieved successfully",
       data: lessons,
     });
@@ -77,7 +78,7 @@ export const listTeacherReviews = async (
     const { id } = teacherIdParamSchema.parse(req.params);
     const reviews = await profileService.listTeacherReviews(id);
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Teacher reviews retrieved successfully",
       data: reviews,
     });

@@ -1,4 +1,4 @@
-import { NextFunction, Request, Response, Router } from "express";
+import { Router } from "express";
 import {
   createLesson,
   createLessonReview,
@@ -9,20 +9,9 @@ import {
   listLessons,
   updateLesson,
 } from "../controllers/lesson.controller";
-import { authenticate } from "../middlewares/auth.middleware";
+import { authenticate, optionalAuthenticate } from "../middlewares/auth.middleware";
 
 const lessonRouter = Router();
-
-const optionalAuthenticate = (req: Request, res: Response, next: NextFunction): void => {
-  const authHeader = req.headers.authorization;
-
-  if (!authHeader) {
-    next();
-    return;
-  }
-
-  authenticate(req, res, next);
-};
 
 lessonRouter.get("/", listLessons);
 lessonRouter.get("/:id", getLessonDetail);

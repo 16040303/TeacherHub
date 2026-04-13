@@ -5,10 +5,11 @@ import {
   LoginPayload,
   ProviderLoginPayload,
   RegisterPayload,
+  ResetPasswordPayload,
   User,
 } from '../types';
-import { AuthSessionDto } from '../types/contract-dto';
-import { parseApiError } from '../utils/api-error';
+import { ApiMessageDto, AuthSessionDto } from '../types/contract-dto';
+import { AppError, parseApiError } from '../utils/api-error';
 import { mapBackendUser } from '../utils/mappers';
 import { toTimestamp } from '../utils/normalizers';
 import { apiRequest } from '../services/apiClient';
@@ -23,72 +24,26 @@ const isRecord = (value: unknown): value is UnknownRecord =>
 const isBrowser = (): boolean =>
   typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
 
-const toNonEmptyString = (value: unknown): string | undefined => {
-  if (typeof value !== 'string') {
-    return undefined;
+
+const extractContractMessage = (
+  responsePayload: unknown,
+  fallbackMessage: string,
+): string => {
+  if (!isRecord(responsePayload)) {
+    return fallbackMessage;
   }
 
-  const normalized = value.trim();
-  return normalized ? normalized : undefined;
+  const message =
+    typeof responsePayload.message === 'string'
+      ? responsePayload.message.trim()
+      : '';
+
+  return message || fallbackMessage;
 };
 
-const hasUserId = (value: unknown): value is { id: string | number } => {
-  if (!isRecord(value)) {
-    return false;
-  }
+const toSafeUser = (dto: AuthSessionDto['user']): SafeUser =>
+  mapBackendUser(dto);
 
-  return typeof value.id === 'string' || typeof value.id === 'number';
-};
-
-const extractAuthSessionDto = (responsePayload: unknown): AuthSessionDto => {
-  const responseData = isRecord(responsePayload) ? responsePayload.data : undefined;
-
-  // Candidate layers from outermost to innermost.
-  // Handles:
-  //   1. apiClient already stripped the envelope: { token, user }
-  //   2. apiClient returned the full envelope: { message, data: { token, user } }
-  //   3. apiClient returned a double-wrapped: { message, data: { data: { token, user } } }
-  //   4. AuthSessionDto already: { token, user } nested in responseData
-  const candidates: unknown[] = [
-    responsePayload, // case 1: already unwrapped
-    responseData,   // case 2: one-level envelope
-    isRecord(responseData) ? responseData.data : undefined, // case 3: double nested
-  ];
-
-  for (const candidate of candidates) {
-    if (!isRecord(candidate)) {
-      continue;
-    }
-
-    const token = toNonEmptyString(candidate.token);
-    const user = candidate.user;
-
-    if (!token || !hasUserId(user)) {
-      continue;
-    }
-
-    return {
-      token,
-      user: user as AuthSessionDto['user'],
-    };
-  }
-
-  throw parseApiError({
-    message: 'Invalid auth response payload',
-    statusCode: 502,
-    raw: responsePayload,
-  });
-};
-
-const toSafeUser = (dto: AuthSessionDto['user']): SafeUser => {
-  const mappedUser = mapBackendUser({
-    ...(dto as Parameters<typeof mapBackendUser>[0]),
-    status: dto.status ?? 'ACTIVE',
-    createdAt: dto.createdAt ?? new Date(0).toISOString(),
-  });
-
-  return mappedUser;
-};
 
 const isSessionExpired = (expiresAt?: string): boolean => {
   if (!expiresAt) {
@@ -164,36 +119,35 @@ const writeStoredSession = (session: AuthSession | null): void => {
 
 const toSessionFromDto = (dto: AuthSessionDto): AuthSession => ({
   token: dto.token,
+  refreshToken: dto.refreshToken,
+  expiresAt: dto.expiresAt,
   user: toSafeUser(dto.user),
 });
 
-const trySessionRequest = async (
-  path: string,
-  payload: LoginPayload | RegisterPayload,
-): Promise<AuthSession | null> => {
-  try {
-    const responsePayload = await apiRequest<unknown>(path, {
-      method: 'POST',
-      body: payload,
-      includeAuth: false,
+const requestSessionRefresh = async (refreshToken: string): Promise<AuthSession> => {
+  const sessionDto = await apiRequest<AuthSessionDto>('/api/auth/refresh-token', {
+    method: 'POST',
+    body: { refreshToken },
+    includeAuth: false,
+  });
+
+  const session = toSessionFromDto(sessionDto);
+  writeStoredSession(session);
+  return session;
+};
+
+const throwAuthApiUnavailableIfNeeded = (
+  parsed: AppError,
+  endpointPath: '/api/auth/login' | '/api/auth/register' | '/api/auth/google',
+): void => {
+  if (
+    parsed.statusCode === 404 ||
+    /failed to fetch|networkerror|network error|request failed/i.test(parsed.message)
+  ) {
+    throw parseApiError({
+      message: `Auth API is unavailable. Please make sure backend \`${endpointPath}\` is running.`,
+      statusCode: 503,
     });
-
-    const sessionDto = extractAuthSessionDto(responsePayload);
-    const session = toSessionFromDto(sessionDto);
-    writeStoredSession(session);
-    return session;
-  } catch (error) {
-    const parsed = parseApiError(error);
-
-    // During migration/dev, keep compatibility if backend is unreachable.
-    if (
-      parsed.statusCode === 404 ||
-      /failed to fetch|networkerror|network error|request failed/i.test(parsed.message)
-    ) {
-      return null;
-    }
-
-    throw parsed;
   }
 };
 
@@ -203,12 +157,21 @@ export const restoreSession = async (): Promise<AuthSession | null> => {
     return null;
   }
 
-  if (isSessionExpired(stored.expiresAt)) {
+  if (!isSessionExpired(stored.expiresAt)) {
+    return stored;
+  }
+
+  if (!stored.refreshToken) {
     writeStoredSession(null);
     return null;
   }
 
-  return stored;
+  try {
+    return await requestSessionRefresh(stored.refreshToken);
+  } catch {
+    writeStoredSession(null);
+    return null;
+  }
 };
 
 export const login = async (payload: LoginPayload): Promise<AuthSession> => {
@@ -217,66 +180,228 @@ export const login = async (payload: LoginPayload): Promise<AuthSession> => {
     password: payload.password,
   };
 
-  const session = await trySessionRequest('/api/auth/login', normalizedPayload);
-  if (session) {
-    return session;
-  }
+  try {
+    const sessionDto = await apiRequest<AuthSessionDto>('/api/auth/login', {
+      method: 'POST',
+      body: normalizedPayload,
+      includeAuth: false,
+    });
 
-  throw parseApiError({
-    message: 'Auth API is unavailable. Please make sure backend `/api/auth/login` is running.',
-    statusCode: 503,
-  });
+    const session = toSessionFromDto(sessionDto);
+    writeStoredSession(session);
+    return session;
+  } catch (error) {
+    const parsed = parseApiError(error);
+
+    throwAuthApiUnavailableIfNeeded(parsed, '/api/auth/login');
+
+    throw parsed;
+  }
 };
 
-export const register = async (payload: RegisterPayload): Promise<AuthSession> => {
-  const normalizedPayload: RegisterPayload = {
-    name: payload.name.trim(),
+export interface RegisterResult {
+  message: string;
+}
+
+export const register = async (payload: RegisterPayload): Promise<RegisterResult> => {
+  const normalizedPayload = {
+    fullName: payload.name.trim(),
     email: payload.email.trim().toLowerCase(),
     password: payload.password,
+    role: 'TEACHER',
   };
 
-  const session = await trySessionRequest('/api/auth/register', {
-    fullName: normalizedPayload.name,
-    email: normalizedPayload.email,
-    password: normalizedPayload.password,
-    role: 'TEACHER',
-  } as unknown as RegisterPayload);
+  try {
+    const responsePayload = await apiRequest<ApiMessageDto>('/api/auth/register', {
+      method: 'POST',
+      body: normalizedPayload,
+      includeAuth: false,
+    });
 
-  if (session) {
-    return session;
+    const message = extractContractMessage(
+      responsePayload,
+      'Registration successful. Please check your email to verify your account.',
+    );
+
+    return { message };
+  } catch (error) {
+    const parsed = parseApiError(error);
+
+    throwAuthApiUnavailableIfNeeded(parsed, '/api/auth/register');
+
+    throw parsed;
   }
+};
 
-  throw parseApiError({
-    message: 'Auth API is unavailable. Please make sure backend `/api/auth/register` is running.',
-    statusCode: 503,
-  });
+export interface VerifyEmailResult {
+  message: string;
+}
+
+export const verifyEmail = async (token: string): Promise<VerifyEmailResult> => {
+  try {
+    const responsePayload = await apiRequest<ApiMessageDto>(
+      `/api/auth/verify-email?token=${encodeURIComponent(token)}`,
+      {
+        method: 'GET',
+        includeAuth: false,
+      },
+    );
+
+    const message = extractContractMessage(
+      responsePayload,
+      'Email verified successfully. You can now log in.',
+    );
+
+    return { message };
+  } catch (error) {
+    throw parseApiError(error);
+  }
+};
+
+export interface ResendVerificationResult {
+  message: string;
+}
+
+export const resendVerification = async (
+  email: string,
+): Promise<ResendVerificationResult> => {
+  try {
+    const responsePayload = await apiRequest<ApiMessageDto>('/api/auth/resend-verification', {
+      method: 'POST',
+      body: { email: email.trim().toLowerCase() },
+      includeAuth: false,
+    });
+
+    const message = extractContractMessage(
+      responsePayload,
+      'If an account with this email exists, a verification email has been sent.',
+    );
+
+    return { message };
+  } catch (error) {
+    throw parseApiError(error);
+  }
 };
 
 export const loginWithProvider = async (
   payload: ProviderLoginPayload,
 ): Promise<AuthSession> => {
-  // Provider endpoints are not yet available in backend auth routes.
-  throw parseApiError({
-    message: `Sign in with ${payload.provider} is not available yet. Please use email/password login.`,
-    statusCode: 501,
-  });
+  if (payload.provider !== 'google') {
+    throw parseApiError({
+      message: `Sign in with ${payload.provider} is not available yet. Please use email/password login.`,
+      statusCode: 501,
+    });
+  }
+
+  const idToken = typeof payload.idToken === 'string' ? payload.idToken.trim() : '';
+
+  if (!idToken) {
+    throw parseApiError({
+      message: 'Google ID token is required',
+      statusCode: 400,
+    });
+  }
+
+  try {
+    const sessionDto = await apiRequest<AuthSessionDto>('/api/auth/google', {
+      method: 'POST',
+      body: { idToken },
+      includeAuth: false,
+    });
+
+    const session = toSessionFromDto(sessionDto);
+    writeStoredSession(session);
+    return session;
+  } catch (error) {
+    const parsed = parseApiError(error);
+
+    throwAuthApiUnavailableIfNeeded(parsed, '/api/auth/google');
+
+    throw parsed;
+  }
 };
+
+export interface ForgotPasswordResult {
+  message: string;
+}
 
 export const forgotPassword = async (
   payload: ForgotPasswordPayload,
-): Promise<boolean> => {
-  const email = payload.email.trim();
+): Promise<ForgotPasswordResult> => {
+  const email = payload.email.trim().toLowerCase();
 
   if (!email) {
     throw parseApiError({ message: 'Email is required', statusCode: 400 });
   }
 
-  // Endpoint is not yet available. Return privacy-safe acknowledgment for UI compatibility.
-  return true;
+  try {
+    const responsePayload = await apiRequest<ApiMessageDto>('/api/auth/forgot-password', {
+      method: 'POST',
+      body: { email },
+      includeAuth: false,
+    });
+
+    const message = extractContractMessage(
+      responsePayload,
+      'If an account with this email exists, a password reset link has been sent.',
+    );
+
+    return { message };
+  } catch (error) {
+    throw parseApiError(error);
+  }
+};
+
+export interface ResetPasswordResult {
+  message: string;
+}
+
+export const resetPassword = async (
+  payload: ResetPasswordPayload,
+): Promise<ResetPasswordResult> => {
+  const token = payload.token.trim();
+
+  if (!token) {
+    throw parseApiError({ message: 'Reset token is required', statusCode: 400 });
+  }
+
+  try {
+    const responsePayload = await apiRequest<ApiMessageDto>('/api/auth/reset-password', {
+      method: 'POST',
+      body: {
+        token,
+        password: payload.password,
+      },
+      includeAuth: false,
+    });
+
+    const message = extractContractMessage(
+      responsePayload,
+      'Password reset successful. Please log in again.',
+    );
+
+    return { message };
+  } catch (error) {
+    throw parseApiError(error);
+  }
 };
 
 export const logout = async (): Promise<void> => {
-  writeStoredSession(null);
+  const stored = readStoredSession();
+
+  try {
+    if (stored?.refreshToken) {
+      await apiRequest<ApiMessageDto>('/api/auth/logout', {
+        method: 'POST',
+        body: { refreshToken: stored.refreshToken },
+        includeAuth: false,
+      });
+    }
+  } catch {
+    // Keep logout client-side idempotent even if backend revocation fails.
+  } finally {
+    writeStoredSession(null);
+  }
 };
 
 export const getCurrentSession = async (): Promise<AuthSession | null> => restoreSession();
@@ -289,10 +414,19 @@ export const refreshSessionUser = async (
     return stored;
   }
 
-  if (isSessionExpired(stored.expiresAt)) {
+  if (!isSessionExpired(stored.expiresAt)) {
+    return stored;
+  }
+
+  if (!stored.refreshToken) {
     writeStoredSession(null);
     return null;
   }
 
-  return stored;
+  try {
+    return await requestSessionRefresh(stored.refreshToken);
+  } catch {
+    writeStoredSession(null);
+    return null;
+  }
 };

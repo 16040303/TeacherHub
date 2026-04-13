@@ -45,6 +45,16 @@ export const findLessonForOrder = async (
   });
 };
 
+export const findOrderById = async (
+  orderId: number,
+  db: DbClient = prisma
+): Promise<OrderWithRelations | null> => {
+  return db.order.findUnique({
+    where: { id: orderId },
+    include: orderInclude,
+  });
+};
+
 export const findOrderByBuyerAndLesson = async (
   buyerId: number,
   lessonId: number,

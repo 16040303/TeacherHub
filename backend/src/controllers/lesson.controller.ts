@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { AuthRequest } from "../middlewares/auth.middleware";
 import * as lessonService from "../services/lesson.service";
 import { handleControllerError } from "../utils/controller-error";
+import { sendSuccess } from "../utils/response";
 import {
   createLessonReviewSchema,
   createLessonSchema,
@@ -20,7 +21,8 @@ export const createLesson = async (req: Request, res: Response): Promise<void> =
     const authReq = req as AuthRequest;
     const lesson = await lessonService.createLesson(payload, authReq.user.userId);
 
-    res.status(201).json({
+    sendSuccess(res, {
+      statusCode: 201,
       message: "Lesson created successfully",
       data: lesson,
     });
@@ -33,7 +35,7 @@ export const listLessons = async (_req: Request, res: Response): Promise<void> =
   try {
     const lessons = await lessonService.listLessons();
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Lessons retrieved successfully",
       data: lessons,
     });
@@ -47,7 +49,7 @@ export const getLessonDetail = async (req: Request, res: Response): Promise<void
     const { id } = lessonIdParamSchema.parse(req.params);
     const lesson = await lessonService.getLessonById(id);
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Lesson retrieved successfully",
       data: lesson,
     });
@@ -64,7 +66,7 @@ export const getLessonSnapshot = async (req: Request, res: Response): Promise<vo
       getOptionalAuthUserId(req)
     );
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Lesson snapshot retrieved successfully",
       data: snapshot,
     });
@@ -78,7 +80,7 @@ export const listLessonReviews = async (req: Request, res: Response): Promise<vo
     const { id } = lessonIdParamSchema.parse(req.params);
     const reviews = await lessonService.listLessonReviews(id);
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Lesson reviews retrieved successfully",
       data: reviews,
     });
@@ -102,7 +104,8 @@ export const createLessonReview = async (
       payload
     );
 
-    res.status(201).json({
+    sendSuccess(res, {
+      statusCode: 201,
       message: "Lesson review submitted successfully",
       data: review,
     });
@@ -119,7 +122,7 @@ export const updateLesson = async (req: Request, res: Response): Promise<void> =
 
     const lesson = await lessonService.updateLesson(id, payload, authReq.user.userId);
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Lesson updated successfully",
       data: lesson,
     });
@@ -135,7 +138,7 @@ export const deleteLesson = async (req: Request, res: Response): Promise<void> =
 
     await lessonService.deleteLesson(id, authReq.user.userId);
 
-    res.status(200).json({
+    sendSuccess(res, {
       message: "Lesson deleted successfully",
     });
   } catch (error) {

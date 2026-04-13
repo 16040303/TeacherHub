@@ -87,6 +87,11 @@ export interface ForgotPasswordPayload {
   email: string;
 }
 
+export interface ResetPasswordPayload {
+  token: string;
+  password: string;
+}
+
 export interface ProviderLoginPayload {
   provider: AuthProvider;
   /** Optional OAuth authorization code for real backend callback exchange. */
@@ -386,12 +391,17 @@ export interface TopUpConversionPreview {
 }
 
 export interface TopUpPaymentSnapshot {
+  transactionId: string;
   status: 'success' | 'failed' | 'pending';
   message: string;
   amountVnd: number;
   coins: number;
   paymentMethod: TopUpPaymentMethod;
   paymentRef: string;
+  paymentUrl?: string;
+  qrPayload?: string;
+  expiresAt?: string;
+  pollIntervalMs?: number;
   transaction: WalletTransaction;
 }
 export type PaymentResultAccessState = 'unlocked' | 'locked' | 'processing';

@@ -6,7 +6,10 @@ import {
   logout,
   refreshSessionUser,
   register,
+  resendVerification,
+  resetPassword,
   restoreSession,
+  verifyEmail,
 } from '../repositories/authRepository';
 import type { UserRole } from '../types';
 
@@ -77,10 +80,13 @@ export const authService = {
   loginWithProvider,
   register,
   forgotPassword,
+  resetPassword,
   logout,
   restoreSession,
   getCurrentSession,
   refreshSessionUser,
+  verifyEmail,
+  resendVerification,
 };
 
 /* Re-export auth contracts from centralized types (mock-agnostic). */
@@ -90,4 +96,5 @@ export type {
   LoginPayload,
   RegisterPayload,
   ForgotPasswordPayload,
+  ResetPasswordPayload,
 } from '../types';
